@@ -1,0 +1,25 @@
+[project]
+name = "tutor-click"
+version = "0.1.0"
+description = "Screen tutor overlay for Hyprland: watches your screen, points, captions and talks you through any app"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=2.9",
+    "faster-whisper>=1.2",
+    "av<18",  # faster-whisper 1.2.1 passes av.open(metadata_errors=...), removed in PyAV 18+
+    "kokoro-onnx>=0.4",
+    "numpy",
+]
+# PyGObject (GTK4, Gtk4LayerShell, PangoCairo) comes from the system:
+#   pacman -S python-gobject python-cairo gtk4 gtk4-layer-shell
+# The venv is created with --system-site-packages to see it.
+
+[dependency-groups]
+dev = ["pytest"]
+
+[project.scripts]
+tutor-click = "tutor_click.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
