@@ -208,9 +208,14 @@ window and capture logic against a stand-in for the system. What nothing here co
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh      # uv, if it is not installed
+ git clone https://github.com/handrenmuhammad/tutor-click.git
 cd tutor-click
 uv venv --python 3.12 && uv pip install -e .
 ```
+
+While the repository is private, the clone needs a GitHub account that has been invited to it and
+is signed in on the Mac (GitHub's `gh` command does both). To get a later fix, run `git pull` in
+the folder, then `uv pip install -e .` again if the fix adds dependencies.
 
 Install Claude Code and sign in to it with your own account (`claude`, then `/login`). Then:
 

@@ -333,5 +333,5 @@ still shows the UI way.
 2. Overlay on the new platforms: GTK for Wayland plus Qt for the rest (my recommendation), or
    move everything to Qt? Not answered. The seam was built on the recommendation, which leaves
    the Linux overlay and panel as they are.
-3. For the Mac: which macOS version and chip, and how the app reaches him (a GitHub repository
-   he can clone, or an archive). The install note assumes Apple Silicon.
+3. For the Mac: which macOS version and chip. The install note assumes Apple Silicon. The app
+   reaches him through a GitHub repository (answered 2026-11-18); private or public is open.
