@@ -1,5 +1,5 @@
 """How the benchmark decides whether what the probe received matches what was sent."""
-from tutor_click.bench import judge, summarize, table
+from tutor_click.platform.hyprland.bench import judge, summarize, table
 
 
 def press(x, y, button=1):

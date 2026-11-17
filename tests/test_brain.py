@@ -5,8 +5,8 @@ import pytest
 
 from tutor_click import config
 from tutor_click.brain import SCHEMA, SYSTEM, Step, Tutor, check_answer
+from tutor_click.platform.base import Shot
 from tutor_click.providers import ProviderError
-from tutor_click.screen import Shot
 
 SHOT = Shot(b"jpeg", 1568, 656, 0.4558)
 

@@ -26,9 +26,10 @@ gi.require_version("Atspi", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Atspi, GdkPixbuf, GLib
 
-from tutor_click import config, screen, verify
+from tutor_click import config, verify
 from tutor_click.brain import Tutor
-from tutor_click.screen import Shot
+from tutor_click.platform.base import Shot
+from tutor_click.platform.hyprland import screen
 
 ROOT = Path.home() / ".local/share/tutor-click/pointing"
 ROLES = ("button", "push button", "toggle button", "radio button", "check box")
@@ -159,7 +160,7 @@ def run(path: str, n: int):
     hits = sum(r["hit"] for r in answered)
     f = meta["shot"]["factor"]
     who = Tutor().provider
-    effort = {"claude-code": config.EFFORT, "api": config.EFFORT, "codex": config.CODEX_EFFORT}.get(who.id, "")
+    effort = who.effort
     print(f"{who.id} {who.model or 'default model'} {effort}, screenshot {shot.width}x{shot.height}, 1 screenshot px = {1 / f:.2f} screen px")
     print(f"targets {len(targets)}, answered {len(answered)}, pointed {len(pointed)}, inside the control {hits}")
     if pointed:

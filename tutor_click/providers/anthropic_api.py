@@ -5,8 +5,9 @@ import os
 
 import anthropic
 
-from .. import config
+from .. import config, settings
 from .base import ProviderError
+from .claude_code import EFFORTS, MODELS
 
 
 class AnthropicAPI:
@@ -16,9 +17,11 @@ class AnthropicAPI:
     billing = "api_key"
     paid_by = "your Anthropic API key, billed per use and separately from any subscription"
     sends_to = "Anthropic"
+    models, efforts, model_env = MODELS, EFFORTS, "TUTOR_CLICK_MODEL"
 
     def __init__(self):
-        self.model = config.MODEL
+        self.model = settings.start(self.id, "model", "TUTOR_CLICK_MODEL", config.MODEL)
+        self.effort = settings.start(self.id, "effort", "TUTOR_CLICK_EFFORT", config.EFFORT)
         self._client = None
 
     def health(self) -> str | None:
@@ -32,14 +35,15 @@ class AnthropicAPI:
         try:
             if self._client is None:
                 self._client = anthropic.Anthropic()
+            # Haiku has no server-side fallback after a refusal; Anthropic's guide says not to send the parameter.
+            fallback = {} if self.model.startswith("claude-haiku") else {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
             resp = self._client.beta.messages.create(
-                model=config.MODEL,
+                model=self.model,
                 max_tokens=8000,
                 system=system,
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                output_config={"effort": config.EFFORT, "format": {"type": "json_schema", "schema": schema}},
+                output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
                 messages=[{"role": "user", "content": [image, {"type": "text", "text": prompt}]}],
+                **fallback,
             )
         except TypeError as e:
             # The SDK raises a bare TypeError when no credential source resolves at all.

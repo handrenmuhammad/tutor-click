@@ -27,7 +27,11 @@ class Provider(Protocol):
     billing: str  # "subscription", "api_key" or "local": who pays for a step
     paid_by: str  # the same in words, e.g. "your ChatGPT plan"
     sends_to: str  # the company that receives the screenshots
-    model: str  # for the trace; "" means the client's default
+    model: str  # what is asked for; "" means the client's default. Changed with `tutor-click model`
+    effort: str  # how hard it thinks; "" where the provider has no such setting
+    models: tuple  # (id, name) of each model offered in the panel; () = only the one from the environment
+    efforts: tuple  # effort levels offered; () = none
+    model_env: str  # the environment variable that sets the model
 
     def ask(self, system: str, schema: dict, jpeg: bytes, prompt: str) -> dict:
         """One answer matching schema. Raises ProviderError."""

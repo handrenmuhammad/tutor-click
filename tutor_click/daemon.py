@@ -4,7 +4,6 @@ One lesson job runs at a time. Any new input (talking, typing, a button) cancels
 first, so the user can always interrupt.
 """
 import json
-import signal
 import socketserver
 import subprocess
 import sys
@@ -13,16 +12,9 @@ import time
 import traceback
 from dataclasses import dataclass
 
-import gi
-
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gio, GLib, Gtk
-
-from . import config, consent, lessons, providers, screen, trace, verify
+from . import config, consent, lessons, platform, providers, settings, trace, verify
 from .brain import Step, Tutor
-from .hands import Hands, Refused, Window, parse_mods
-from .overlay import MOVE_SECS, Overlay
-from .panel import Panel
+from .platform.base import Monitor, Refused, Shot, Window
 from .providers import ProviderError
 from .voice import Recorder, Speaker, Transcriber
 
@@ -56,13 +48,13 @@ STATUS = {None: "Ready", "listening": "Listening…", "thinking": "Looking at yo
 MODE_HINT = {"guide": "You do each step. I point and explain.", "auto": "I do the steps and explain. Talk or press Stop to interrupt."}
 # (keys, command, on release)
 BINDS = [
-    ("SUPER + ALT + space", "ptt-down", False),
-    ("SUPER + ALT + space", "ptt-up", True),
-    ("SUPER + ALT + N", "next", False),
-    ("SUPER + ALT + T", "type", False),
-    ("SUPER + ALT + M", "mode toggle", False),
-    ("SUPER + ALT + E", "explain", False),
-    ("SUPER + ALT + Escape", "stop", False),
+    ("super+alt+space", "ptt-down", False),
+    ("super+alt+space", "ptt-up", True),
+    ("super+alt+n", "next", False),
+    ("super+alt+t", "type", False),
+    ("super+alt+m", "mode toggle", False),
+    ("super+alt+e", "explain", False),
+    ("super+alt+escape", "stop", False),
 ]
 
 
@@ -94,56 +86,56 @@ class Outcome:
 
 
 class Daemon:
-    def __init__(self):
-        self.app = Gtk.Application(application_id="dev.handren.TutorClick", flags=Gio.ApplicationFlags.NON_UNIQUE)
-        self.app.connect("activate", self._activate)
+    def __init__(self, desk=None):
+        self.desk = desk or platform.load()  # the desktop backend: screen, input, overlay, panel, hotkeys, sound
+        self.app = None
         self.tutor = Tutor()
-        self.recorder = Recorder()
+        self.tutor.desktop = getattr(self.desk, "NAME", "")
+        self.recorder = Recorder(self.desk.sound)
         self.transcriber = Transcriber()
-        self.speaker = Speaker()
+        self.speaker = Speaker(self.desk.sound)
         self.busy = threading.Lock()  # held by the running job
         self.state = threading.Lock()  # guards job_id
         self.job_id = 0
         self.mode = "guide"
         self.recording = False
         self.rec_id = 0
-        self.last: tuple[Step, screen.Shot, float] | None = None  # step on screen, its screenshot, when
+        self.last: tuple[Step, Shot, float] | None = None  # step on screen, its screenshot, when
         self.record = lessons.Lesson()  # this lesson, as saved to disk after every step
         self.resumable: lessons.Lesson | None = None  # the lesson left unfinished when the app last stopped
         self.trace_id = ""  # id of the step in self.last: "<lesson id>-<step number>"
         self.note = ""  # something the model must hear with the next event (an action that showed no effect)
         self.pending_backend = ""  # a provider the user picked once and has to pick again to confirm
-        self.overlay: Overlay | None = None
-        self.panel: Panel | None = None
-        self.hands: Hands | None = None
-        self.monitor: screen.Monitor | None = None
+        self.overlay = None
+        self.panel = None
+        self.hands = None
+        self.monitor: Monitor | None = None
 
     def run(self):
         config.RUNTIME.mkdir(parents=True, exist_ok=True)
         config.LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         if config.LOG_FILE.exists() and config.LOG_FILE.stat().st_size > 1_000_000:
             config.LOG_FILE.unlink()  # bounded log
-        for sig in (signal.SIGINT, signal.SIGTERM):  # Ctrl-C / kill end the GTK loop cleanly
-            GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: (self.app.quit(), False)[1])
+        self.app = self.desk.App(self._activate)
         try:
-            return self.app.run([])
+            return self.app.run()
         finally:
             self.speaker.stop()
             self._binds(False)
             config.SOCKET.unlink(missing_ok=True)
 
     def _activate(self, app):
-        self.monitor = screen.focused_monitor()
-        self.overlay = Overlay(app, self.monitor.name)
+        self.monitor = self.desk.focused_monitor()
         menu = [(pid, cls.menu) for pid, cls in providers.PROVIDERS.items()]
-        self.panel = Panel(app, Overlay._gdk_monitor(self.monitor.name), self.monitor, self._from_panel, menu, self.tutor.provider.id)
-        self.hands = Hands(self.monitor)
+        self.overlay, self.panel = self.desk.make_ui(app, self.monitor, self._from_panel, menu, self.tutor.provider.id)
+        self.hands = self.desk.Hands(self.monitor)
+        self._show_choices()
         self._find_unfinished()
-        app.hold()
         threading.Thread(target=self._serve, daemon=True).start()
         threading.Thread(target=self._warm, daemon=True).start()
         self._binds(True)
-        log(f"app on {self.monitor.name}, provider {self.tutor.provider.id} (model {self.tutor.provider.model or 'default'}), hotkeys {'on' if config.BINDS else 'off'}")
+        p = self.tutor.provider
+        log(f"app on {self.monitor.name}, provider {p.id} (model {p.model or 'default'}, effort {p.effort or 'none'}), hotkeys {'on' if config.BINDS else 'off'}")
 
     def _warm(self):
         """Load the speech models now so the first question is not slow."""
@@ -153,20 +145,9 @@ class Daemon:
         log(f"voice models loaded ({time.monotonic() - t0:.1f}s)")
 
     def _binds(self, on: bool):
-        """Register or remove the global hotkeys in the running Hyprland (not in its config file)."""
-        if not config.BINDS:
-            return
-        cli = f"{sys.executable} -m tutor_click"
-        if on:
-            code = " ".join(
-                f"hl.bind({json.dumps(keys)}, hl.dsp.exec_cmd({json.dumps(f'{cli} {cmd}')}){', { release = true }' if release else ''})"
-                for keys, cmd, release in BINDS
-            )
-        else:
-            code = " ".join(f"hl.unbind({json.dumps(keys)})" for keys in dict.fromkeys(k for k, _, _ in BINDS))
-        r = subprocess.run(["hyprctl", "eval", code], capture_output=True, text=True, check=False)
-        if r.stdout.strip() != "ok":
-            print("hotkeys:", r.stdout.strip()[:300], file=sys.stderr)
+        """Global hotkeys, registered while the app runs and removed when it quits."""
+        if config.BINDS:
+            self.desk.binds(on, BINDS, f"{sys.executable} -m tutor_click")
 
     # ---- control socket and panel ------------------------------------------
     def _serve(self):
@@ -243,6 +224,8 @@ class Daemon:
             return want
         elif cmd == "backend":
             return self._switch(text)
+        elif cmd in ("model", "effort"):
+            return self._choose(cmd, text.strip())
         elif cmd == "stop":
             self._stop_everything()
             self.overlay.clear()
@@ -263,14 +246,15 @@ class Daemon:
             self.panel.show()
         elif cmd == "status":
             return json.dumps({"mode": self.mode, "busy": self.busy.locked(), "recording": self.recording, "acting_in": self.hands.target,
-                               "backend": self.tutor.provider.id, "lesson": self.record.id, "step": self.record.step_n,
+                               "backend": self.tutor.provider.id, "model": self.tutor.provider.model, "effort": self.tutor.provider.effort,
+                               "lesson": self.record.id, "step": self.record.step_n,
                                "unfinished": self.resumable.id if self.resumable else None})
         elif cmd == "point":  # debug: "x y caption" in logical px
             x, y, *caption = text.split(" ", 2)
             self.overlay.show_step((float(x), float(y)), " ".join(caption), "")
         elif cmd == "quit":
             self._stop_everything()
-            GLib.idle_add(self.app.quit)  # GTK calls must run on the main loop, not this thread
+            self.app.quit()
         else:
             return f"unknown command: {cmd}"
         return "ok"
@@ -383,9 +367,45 @@ class Daemon:
         return self._keep(f"Now using {new.name}, paid by {new.paid_by}. The lesson carries on from where it was.")
 
     def _keep(self, message: str) -> str:
-        self.panel.set_backend(self.tutor.provider.id)  # the menu shows what is in use, whatever was clicked
+        self._show_choices()  # the menus show what is in use, whatever was clicked
+        self.panel.set_backend(self.tutor.provider.id)
         self.panel.set_heard(message)
         return message
+
+    def _models(self, p) -> list[tuple[str, str]]:
+        """(id, name) of the models to offer for a provider: its list, plus the one in use if that came from the environment."""
+        models = list(p.models)
+        if p.model not in [m for m, _ in models]:
+            models.append((p.model, p.model or "its own default"))
+        return models
+
+    def _show_choices(self):
+        p = self.tutor.provider
+        self.panel.set_choices(self._models(p), p.model, list(p.efforts), p.effort)
+
+    def _choose(self, key: str, want: str) -> str:
+        """Pick the model or the effort of the provider in use. Only the user's own command or panel choice gets here.
+
+        It applies from the next step and is remembered for that provider.
+        """
+        p = self.tutor.provider
+        models = dict(self._models(p))
+        offered = list(models) if key == "model" else list(p.efforts)
+        if not want:
+            return json.dumps({"backend": p.id, key: getattr(p, key), "offered": offered})
+        if want not in offered:
+            if key == "effort":
+                return self._keep(f"{p.name} takes {', '.join(offered)}." if offered else f"{p.name} has no effort setting.")
+            return self._keep(f"{p.name} offers {', '.join(offered)}." if p.models else f"{p.name} takes its model from {p.model_env}, set before the app starts.")
+        if want != getattr(p, key):
+            setattr(p, key, want)
+            try:
+                settings.save(p.id, key, want)
+            except OSError as e:  # it still applies until the app closes
+                log("settings not saved:", e)
+            log(f"{key}:", want)
+        effort = f" at {p.effort} effort" if p.effort else ""
+        return self._keep(f"{p.name} answers with {models.get(p.model, p.model)}{effort} from the next step.")
 
     def _offer(self, e: ProviderError) -> str:
         """A provider failure in words, with what the user can choose. It never chooses for them."""
@@ -436,13 +456,13 @@ class Daemon:
         self._outcome("reported", "NO_VISIBLE_CHANGE" if changed is False else "")
         self._lesson(my, f"{NEXT_GUIDE}\n{CHECK.format(expect=step.expect, measured=MEASURED[changed])}", False, shot=shot)
 
-    def _changed(self, step: Step, before: screen.Shot, after: screen.Shot) -> bool | None:
+    def _changed(self, step: Step, before: Shot, after: Shot) -> bool | None:
         """Whether the window under the step's point differs between two screenshots. None if there is no such window."""
         if step.point is None:
             return None
         try:
             win = self.hands.window_at(self.monitor.x + step.point[0] / before.factor, self.monitor.y + step.point[1] / before.factor)
-        except (subprocess.CalledProcessError, OSError, ValueError):  # hyprctl gone or bad JSON
+        except (subprocess.CalledProcessError, OSError, ValueError):  # the window list could not be read
             return None
         return win and verify.compare(before, after, verify.window_rect(win, self.monitor, after)).changed
 
@@ -472,22 +492,22 @@ class Daemon:
         self.record.outcome(status, code)
         self._save()
 
-    def _capture(self) -> screen.Shot:
+    def _capture(self) -> Shot:
         """Screenshot without our own overlay and panel in it."""
         self.overlay.set_hidden(True)
         self.panel.set_hidden(True)
-        time.sleep(0.12)  # let the compositor drop our frame before grim captures
+        time.sleep(0.12)  # let the compositor drop our frame before the capture
         try:
-            return screen.capture(self.monitor, config.MAX_EDGE)
+            return self.desk.capture(self.monitor, config.MAX_EDGE)
         finally:
             self.overlay.set_hidden(False)
             self.panel.set_hidden(False)
 
-    def _look(self, my: int, event: str, from_user: bool, mode: str, shot: screen.Shot | None = None) -> tuple[Step, screen.Shot]:
+    def _look(self, my: int, event: str, from_user: bool, mode: str, shot: Shot | None = None) -> tuple[Step, Shot]:
         """Screenshot (unless one was just taken), ask the tutor, show the step. Does not speak."""
         self._status("thinking")
         shot = shot or self._capture()
-        window = screen.active_window()
+        window = self.desk.active_window()
         self._check(my)
 
         t0 = time.monotonic()
@@ -507,7 +527,8 @@ class Daemon:
         m = self.monitor
         trace.write({
             "ev": "step", "id": self.trace_id, "mode": mode, "from_user": from_user,
-            "backend": self.tutor.provider.id, "model": self.tutor.provider.model, "model_secs": round(secs, 2),
+            "backend": self.tutor.provider.id, "model": self.tutor.provider.model, "effort": self.tutor.provider.effort,
+            "model_secs": round(secs, 2),
             "monitor": {"name": m.name, "x": m.x, "y": m.y, "w": m.logical_w, "h": m.logical_h, "scale": m.scale},
             "shot": {"w": shot.width, "h": shot.height, "factor": round(shot.factor, 4), "bytes": len(shot.jpeg)},
             "window": window.split(" - ")[0],  # class only: titles carry file names
@@ -525,11 +546,11 @@ class Daemon:
         """Class of the window under a logical point on our monitor, for the trace."""
         try:
             win = self.hands.window_at(self.monitor.x + x, self.monitor.y + y)
-        except (subprocess.CalledProcessError, OSError, ValueError):  # hyprctl gone or bad JSON
+        except (subprocess.CalledProcessError, OSError, ValueError):  # the window list could not be read
             return None
         return win.cls if win else None
 
-    def _lesson(self, my: int, event: str, from_user: bool = True, acting: str = "mode", shot: screen.Shot | None = None):
+    def _lesson(self, my: int, event: str, from_user: bool = True, acting: str = "mode", shot: Shot | None = None):
         """acting: "mode" follows the current mode, "never" only explains, "once" performs the first step.
 
         shot: a screenshot taken a moment ago (after an action), used for the first look.
@@ -596,7 +617,7 @@ class Daemon:
         expected = f' You expected: "{step.expect}"' if step.expect else ""
         return f"(automatic) {lead}{outcome.facts}{expected} This is the screen now. Judge from it whether the step worked, then continue."
 
-    def _perform(self, my: int, step: Step, shot: screen.Shot, narrate: bool = True) -> tuple[Outcome, screen.Shot | None]:
+    def _perform(self, my: int, step: Step, shot: Shot, narrate: bool = True) -> tuple[Outcome, Shot | None]:
         """Speak the step while performing its action, then look at what it did.
 
         Returns the outcome and the screenshot taken afterwards (None if nothing was sent).
@@ -605,7 +626,7 @@ class Daemon:
         talk.start()
         before = []  # the screen at the last moment before the input goes out
         try:
-            self._sleep(my, MOVE_SECS + 0.2 if narrate else 0.1)  # the pointer arrives first, so the user sees where
+            self._sleep(my, self.desk.MOVE_SECS + 0.2 if narrate else 0.1)  # the pointer arrives first, so the user sees where
             self.panel.set_keyboard(False)  # give keyboard focus back to the app
             time.sleep(0.06)
             t0 = time.monotonic()
@@ -640,16 +661,16 @@ class Daemon:
             self._status("speaking")
             self.speaker.say(text)
 
-    def _act(self, step: Step, shot: screen.Shot, armed=None) -> Window:
-        """armed is called once the input is about to go out (see Hands._aim)."""
+    def _act(self, step: Step, shot: Shot, armed=None) -> Window:
+        """armed is called once the input is about to go out, just before the press."""
         f = shot.factor
         pt = (step.point[0] / f, step.point[1] / f) if step.point else None
         a = step.action
         if a in ("click", "double_click", "right_click", "middle_click"):
             button = {"right_click": "right", "middle_click": "middle"}.get(a, "left")
-            win = self.hands.click(*pt, button=button, count=2 if a == "double_click" else 1, mods=parse_mods(step.keys), armed=armed)
+            win = self.hands.click(*pt, button=button, count=2 if a == "double_click" else 1, mods=step.keys, armed=armed)
         elif a == "drag":
-            win = self.hands.drag(*pt, step.point2[0] / f, step.point2[1] / f, mods=parse_mods(step.keys), armed=armed)
+            win = self.hands.drag(*pt, step.point2[0] / f, step.point2[1] / f, mods=step.keys, armed=armed)
         elif a == "scroll":
             win = self.hands.scroll(*pt, step.notches, armed=armed)
         elif a == "key":

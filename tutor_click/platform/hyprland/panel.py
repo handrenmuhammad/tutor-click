@@ -52,6 +52,8 @@ class Panel:
         self.monitor = monitor
         self.backends = [pid for pid, _ in backends]
         self.on_command = on_command
+        self.models: list[str] = []  # ids behind the model menu's rows
+        self.efforts: list[str] = []
         self.right = True
         self._setting = False
 
@@ -133,6 +135,20 @@ class Panel:
         row.append(who)
         row.append(self.backend)
         self.body.append(row)
+
+        row = Gtk.Box(spacing=6)
+        self.model = Gtk.DropDown.new_from_strings([])
+        self.model.set_tooltip_text("Which model answers. A smaller one is faster and uses less of your plan")
+        self.model.connect("notify::selected", lambda d, _p: self._choice("model", self.models, d))
+        self.effort = Gtk.DropDown.new_from_strings([])
+        self.effort.set_tooltip_text("How hard the model thinks before it answers. Higher is slower")
+        self.effort.connect("notify::selected", lambda d, _p: self._choice("effort", self.efforts, d))
+        for text, menu in (("Model", self.model), ("Effort", self.effort)):
+            label = Gtk.Label(label=text, xalign=0)
+            label.add_css_class("tp-status")
+            row.append(label)
+            row.append(menu)
+        self.body.append(row)
         box.append(self.body)
 
         win.set_child(box)
@@ -160,6 +176,11 @@ class Panel:
     def _backend_chosen(self, dropdown, _param):
         if not self._setting:
             self._send("backend", self.backends[dropdown.get_selected()])
+
+    def _choice(self, cmd, ids, dropdown):
+        i = dropdown.get_selected()
+        if not self._setting and i < len(ids):
+            self._send(cmd, ids[i])
 
     def _mic_toggled(self, btn):
         btn.set_label("Send voice" if btn.get_active() else "Talk")
@@ -205,6 +226,19 @@ class Panel:
     def set_backend(self, backend):
         self._setting = True
         self.backend.set_selected(self.backends.index(backend))
+        self._setting = False
+
+    @_ui
+    def set_choices(self, models, model, efforts, effort):
+        """models: (id, name) of each model offered; efforts: the levels offered. A menu with nothing to choose is greyed out."""
+        self._setting = True
+        self.models, self.efforts = [m for m, _ in models], list(efforts)
+        for menu, ids, names, current in ((self.model, self.models, [n for _, n in models], model),
+                                          (self.effort, self.efforts, self.efforts or ["none"], effort)):
+            menu.set_model(Gtk.StringList.new(names))
+            if current in ids:
+                menu.set_selected(ids.index(current))
+            menu.set_sensitive(len(ids) > 1)
         self._setting = False
 
     @_ui

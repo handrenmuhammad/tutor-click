@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tutor_click import hands, wheel
-from tutor_click.hands import Hands, Refused, parse_combo, parse_mods
-from tutor_click.screen import Monitor
+from tutor_click.platform import hands as base_hands
+from tutor_click.platform.base import Monitor, Refused
+from tutor_click.platform.hyprland import hands, wheel
+from tutor_click.platform.hyprland.hands import Hands, parse_combo, parse_mods
 
 
 def client(address, cls, at, size, workspace=1, floating=False, focus=0, **over) -> dict:
@@ -19,7 +20,7 @@ def client(address, cls, at, size, workspace=1, floating=False, focus=0, **over)
 
 
 class FakeHyprctl:
-    """Stands in for the subprocess module inside tutor_click.hands. Records every Lua eval.
+    """Stands in for the subprocess module inside the Hyprland hands. Records every Lua eval.
 
     Like Hyprland, it remembers which window was focused last and where the cursor was sent.
     """
@@ -63,7 +64,7 @@ NAUTILUS = client("0xcc", "org.gnome.Nautilus", (1500, 0), (500, 800), focus=2)
 def hypr(monkeypatch):
     fake = FakeHyprctl([PINTA, KITTY, NAUTILUS])
     monkeypatch.setattr(hands, "subprocess", fake)
-    monkeypatch.setattr(hands, "time", SimpleNamespace(sleep=lambda _: None))
+    monkeypatch.setattr(base_hands, "time", SimpleNamespace(sleep=lambda _: None))
     return fake
 
 

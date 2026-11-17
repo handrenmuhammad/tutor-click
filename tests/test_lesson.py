@@ -1,15 +1,15 @@
 """The lesson loop in tutor_click.daemon, with a fake tutor, fake hands, fake screen and a fake clock."""
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from images import jpeg
 
-from tutor_click import config, consent, daemon, lessons, providers, screen
+from tutor_click import config, consent, daemon, lessons, providers, settings
 from tutor_click.brain import Step
-from tutor_click.hands import Refused, Window
+from tutor_click.platform.base import Monitor, Refused, Shot, Window
 from tutor_click.providers import ProviderError
-from tutor_click.screen import Monitor, Shot
 
 W, H, FACTOR = 1720, 720, 0.5  # screenshot px = logical px * 0.5
 PINTA = Window("0xaa", "pinta", "Unsaved Image 1", (0, 0), (3440, 1440))
@@ -59,7 +59,7 @@ class FakeUI:
 
 
 class FakeSpeaker:
-    def __init__(self):
+    def __init__(self, sound=None):
         self.said = []
 
     def say(self, text):
@@ -73,7 +73,14 @@ def fake_provider(pid, name, billing="subscription", sends_to="Anthropic", paid_
     """A provider class as the daemon sees one: who it is, who pays, whether it can be used."""
 
     class P:
-        id, menu, model = pid, name, ""
+        id, menu, model, effort, model_env = pid, name, "", "", f"TUTOR_CLICK_{pid.upper()}_MODEL"
+        models, efforts = (), ()  # nothing to choose, unless a test gives it some
+
+        def __init__(self):
+            if self.models:
+                self.model = settings.start(pid, "model", "TUTOR_CLICK_MODEL", self.models[0][0])
+            if self.efforts:
+                self.effort = settings.start(pid, "effort", "TUTOR_CLICK_EFFORT", self.efforts[1])
 
         def health(self):
             return problem
@@ -181,14 +188,13 @@ def make(monkeypatch):
         tutor = FakeTutor(steps)
         monkeypatch.setattr(daemon, "Tutor", lambda: tutor)
         for name in ("Recorder", "Transcriber"):
-            monkeypatch.setattr(daemon, name, lambda: None)
+            monkeypatch.setattr(daemon, name, lambda *args: None)
         monkeypatch.setattr(daemon, "Speaker", FakeSpeaker)
         monkeypatch.setattr(daemon, "time", FakeClock())
         monkeypatch.setattr(providers, "PROVIDERS", FAKES)
-        d = daemon.Daemon()
-        d.screen = FakeScreen()
-        monkeypatch.setattr(screen, "capture", d.screen.capture)
-        monkeypatch.setattr(screen, "active_window", lambda: 'pinta - "Unsaved Image 1"')
+        fake = FakeScreen()  # the desktop, as far as the lesson loop sees one
+        d = daemon.Daemon(SimpleNamespace(capture=fake.capture, active_window=lambda: 'pinta - "Unsaved Image 1"', MOVE_SECS=0.7, sound=None))
+        d.screen = fake
         d.overlay, d.panel = FakeUI(), FakeUI()
         d.hands = hands or FakeHands()
         d.monitor = Monitor("HDMI-A-1", 3440, 1440, 1.0)
@@ -236,8 +242,8 @@ def test_every_kind_of_action_reaches_the_hands_in_logical_pixels(make):
     d._lesson(d.job_id, "show me everything")
     assert d.hands.calls == [
         ("click", 400.0, 200.0, "left", 2, ""),
-        ("click", 400.0, 200.0, "right", 1, "SHIFT"),
-        ("drag", 400.0, 200.0, 800.0, 600.0, "CTRL"),
+        ("click", 400.0, 200.0, "right", 1, "shift"),  # modifiers reach the hands as the model wrote them
+        ("drag", 400.0, 200.0, 800.0, 600.0, "ctrl"),
         ("scroll", 400.0, 200.0, -3),
         ("keys", "ctrl+z", (400.0, 200.0)),
         ("type", "hello"),
@@ -731,3 +737,82 @@ def test_pressing_next_step_many_times_does_not_push_the_goal_out(make):
         d._next(d.job_id)
     assert [from_user for _, _, from_user in d.tutor.asked] == [True] + [False] * n
     assert d.record.memory["asks"] == ["teach me the brush"]
+
+
+# ---- model and effort ------------------------------------------------------------
+@pytest.fixture
+def choosy(monkeypatch):
+    """Claude offers two models and three effort levels; Codex an effort only; the local model neither."""
+    monkeypatch.setattr(FAKES["claude-code"], "models", (("claude-big", "Big 5"), ("claude-small", "Small 5")))
+    monkeypatch.setattr(FAKES["claude-code"], "efforts", ("low", "medium", "high"))
+    monkeypatch.setattr(FAKES["codex"], "efforts", ("low", "medium", "high"))
+
+
+def choices(d):
+    return [args for name, args in d.panel.calls if name == "set_choices"][-1]
+
+
+def test_the_model_and_effort_in_use_are_listed_and_shown(make, choosy):
+    d = make([TALK])
+    assert json.loads(d.dispatch("model", "")) == {"backend": "claude-code", "model": "claude-big", "offered": ["claude-big", "claude-small"]}
+    assert json.loads(d.dispatch("effort", "")) == {"backend": "claude-code", "effort": "medium", "offered": ["low", "medium", "high"]}
+    status = json.loads(d.dispatch("status", ""))
+    assert (status["model"], status["effort"]) == ("claude-big", "medium")
+    d._show_choices()
+    assert choices(d) == ([("claude-big", "Big 5"), ("claude-small", "Small 5")], "claude-big", ["low", "medium", "high"], "medium")
+
+
+def test_a_picked_model_and_effort_answer_the_next_step_and_are_traced(make, choosy):
+    d = make([TALK, TALK])
+    d._ask(d.job_id, "what is this?")
+    assert d.dispatch("model", "claude-small") == "Claude answers with Small 5 at medium effort from the next step."
+    assert d.dispatch("effort", "low") == "Claude answers with Small 5 at low effort from the next step."
+    assert choices(d)[1::2] == ("claude-small", "low")  # the menus follow
+    d._ask(d.job_id, "and that?")
+    steps = [(r["model"], r["effort"]) for r in trace_lines() if r["ev"] == "step"]
+    assert steps == [("claude-big", "medium"), ("claude-small", "low")]
+    assert d.record.step_n == 2  # choosing did not start a new lesson
+
+
+def test_what_was_picked_is_remembered_per_provider_across_a_restart(make, choosy):
+    d = make([TALK])
+    d.dispatch("model", "claude-small")
+    d.dispatch("effort", "high")
+    d._switch("codex yes")
+    d.dispatch("effort", "low")
+    d2 = make([TALK])
+    d2.tutor.provider = providers.create("claude-code")
+    assert (d2.tutor.provider.model, d2.tutor.provider.effort) == ("claude-small", "high")
+    assert providers.create("codex").effort == "low"
+    assert json.loads(config.SETTINGS_FILE.read_text()) == {"claude-code": {"model": "claude-small", "effort": "high"}, "codex": {"effort": "low"}}
+
+
+def test_the_environment_outranks_what_was_picked(make, choosy, monkeypatch):
+    d = make([TALK])
+    d.dispatch("model", "claude-small")
+    monkeypatch.setenv("TUTOR_CLICK_MODEL", "anything")
+    assert providers.create("claude-code").model == "claude-big"  # what config read for the variable, here the default
+
+
+def test_a_model_or_effort_that_is_not_offered_changes_nothing(make, choosy):
+    d = make([TALK])
+    assert d.dispatch("model", "gpt-9") == "Claude offers claude-big, claude-small."
+    assert d.dispatch("effort", "extreme") == "Claude takes low, medium, high."
+    assert (d.tutor.provider.model, d.tutor.provider.effort) == ("claude-big", "medium")
+    assert choices(d)[1::2] == ("claude-big", "medium")  # a menu that was clicked goes back to what is in use
+    assert not config.SETTINGS_FILE.exists()
+
+
+def test_a_provider_with_nothing_to_choose_says_where_its_model_comes_from(make, choosy):
+    d = make([TALK])
+    d._switch("local")
+    assert d.tutor.provider.id == "local"
+    assert choices(d) == ([("", "its own default")], "", [], "")  # shown, greyed out
+    assert d.dispatch("model", "llava") == "the local model takes its model from TUTOR_CLICK_LOCAL_MODEL, set before the app starts."
+    assert d.dispatch("effort", "low") == "the local model has no effort setting."
+
+
+def test_switching_provider_shows_that_providers_choices(make, choosy):
+    d = make([TALK])
+    d._switch("codex yes")
+    assert choices(d) == ([("", "its own default")], "", ["low", "medium", "high"], "medium")

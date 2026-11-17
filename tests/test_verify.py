@@ -2,8 +2,7 @@
 from images import jpeg
 
 from tutor_click import verify
-from tutor_click.hands import Window
-from tutor_click.screen import Monitor, Shot
+from tutor_click.platform.base import Monitor, Shot, Window
 
 W, H = 800, 400
 MON = Monitor("HDMI-A-1", 1600, 800, 1.0)  # shot px = logical px * 0.5

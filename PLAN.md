@@ -260,9 +260,78 @@ still shows the UI way.
     provider other than Claude with the new `concept` field against the real service.
   - Seen, not fixed: after `kill -9` the hotkeys stay registered in Hyprland (the check ran with
     `TUTOR_CLICK_BINDS=0`, so what a second registration does is untested).
+- **Model and effort choice, 2026-11-17** (asked for by Handren, not a numbered phase). 195 tests,
+  `ruff` clean.
+  - Each provider says which models and effort levels it offers and holds the ones in use. The
+    panel has a Model and an Effort menu; `tutor-click model` and `tutor-click effort` do the same.
+    Saved per provider in `settings.json`; an environment variable that is set outranks it. Every
+    step's trace line now carries `effort` next to `model`.
+  - Claude offers Fable 5.2, Opus 5.5, Sonnet 5.5 and Haiku 5.5 at five effort levels. Codex
+    offers effort only. The key-based and local providers offer neither.
+  - Live: listed, switched to Haiku at `low` and then Sonnet from the command line, menus seen in
+    a screenshot of the panel, one real step each (5.1 s and 6.2 s), model and effort in the trace.
+  - Measured on the saved Pinta set, 47 controls, three at a time: Haiku `low` 46 hits, 5.3 s
+    median; Haiku `medium` 46, 5.5 s; Opus `low` 44, 7.6 s; Opus `medium` 45, 7.0 s (the P1 run);
+    Sonnet `medium` 44, 8.1 s. The accuracy differences are within one control.
+  - Not verified: choosing in the panel with the mouse (the menus were driven from the command
+    line); Fable 5.2 and efforts above `medium`; a whole lesson on anything but Opus `medium`;
+    the Claude API provider with a real key, including that Haiku is sent without `fallbacks`.
+- **Mac asked for on 2026-11-17, ahead of P4, X11, browser and Windows.** Handren's brother has a
+  Mac and will test there. That makes every macOS check a round trip through another person, so
+  the macOS code has to report on itself (see "Next for Mac").
+- **P5.1 done, 2026-11-17: the platform seam.** 202 tests, `ruff` clean.
+  - `tutor_click/platform/base.py` holds what every backend deals in (`Monitor`, `Shot`, `Window`,
+    `Refused`). `platform.load()` returns the backend for this desktop or raises `Unsupported`
+    with a sentence. `platform/hyprland/` is the one backend: `screen`, `hands`, `wheel`,
+    `overlay`, `panel`, `bench`, plus new `app` (GTK loop, hotkeys, the layer-shell re-exec) and
+    `sound` (the record, play and fallback-voice commands).
+  - `daemon.py`, `voice.py`, `verify.py`, `brain.py` and `__main__.py` import nothing from the
+    backend. The daemon takes it as an argument. Modifiers and hotkeys cross the seam in neutral
+    form (`"ctrl+shift"`, `"super+alt+n"`) and the backend turns them into Hyprland's.
+  - The plan's check, as run: no `hyprctl`, `grim`, `pw-record`, `paplay`, `LayerShell`, `Gtk` or
+    `GLib` outside `platform/` (a test enforces it). The earlier tests pass with their imports
+    changed and two expected values changed (`"shift"` where the daemon used to pass `"SHIFT"`).
+  - Live through the seam: app start with the re-exec, overlay pointer and caption (seen in a
+    screenshot), panel, one real step (6.1 s), the seven hotkeys registered and removed again on
+    quit (counted in `hyprctl binds`), one second recorded through `sound`, the bench entry point.
+  - Not verified live: input injection through the moved `hands` (unit tests against the fake
+    `hyprctl` only; `tutor-click bench 20` would cover it and takes over the mouse).
+  - Left outside the seam, each needed before macOS runs: `verify.py` decodes JPEGs with
+    GdkPixbuf; `tutor-click type` calls `fuzzel`; `tutor-click install` writes a `.desktop` file;
+    `config.NEVER_ACT` lists Linux terminal names; paths are XDG.
+- **Mac backend written, 2026-11-17. Not run on a Mac.** 244 tests, `ruff` clean.
+  - `platform/qt/`: overlay, panel, main loop and a test window in PySide6. Checked here drawn
+    off screen: both rendered and looked at; every control's command; menus; calls from other
+    threads; and the real lesson loop run on it with this machine's screen and sound (one real
+    step, 4.9 s, clean exit).
+  - `platform/hands.py`: the input guards and the order of each action, now shared. The Hyprland
+    hands are a subclass that only supplies primitives; their 60-odd tests against the fake
+    `hyprctl` pass unchanged. So the Mac gets the tested guards, not a copy.
+  - `platform/macos/`: `native.py` is every call into macOS and nothing else (window list, front
+    app, activate, cursor, mouse, wheel, keys, text, the two permissions). `hands.py`, `screen.py`
+    and `sound.py` sit on it. 20 tests run them against a stand-in for `native.py`.
+  - `platform/pcm.py`: microphone and speaker as child processes on PortAudio. Tested with a
+    stand-in for PortAudio; `sounddevice` is not installed here.
+  - `tutor-click doctor [--input] [--ask] [--no-sound]`: one check at a time, one report. Run here
+    on Hyprland: finds the overlay's ring in a screenshot (16 of 16 points) and sees it gone when
+    hidden, records, beeps, checks the provider. The input check runs against the Qt test window
+    in a test; it found one real fault (the window was closed from the wrong thread), now fixed.
+  - Also for the Mac: `verify.py` decodes with Pillow (within 3 levels of GdkPixbuf on two real
+    screenshots, tolerance is 8); the prompt names the desktop so the model says `cmd` on a Mac;
+    the control socket falls back to the user's own temp folder.
+  - **Unverified, all of it on the Mac's side:** every line of `native.py`; whether macOS lets the
+    app bring another app to the front (if not, every action is refused with a spoken reason,
+    nothing is pressed); whether the Qt overlay stays on top and lets clicks through; `screencapture
+    -R` on a second screen; the scroll amount; that the dependencies install.
+  - Not built for macOS: global hotkeys, `type`, `install`, `bench`, the overlay on a full-screen
+    app's Space.
+  - Next: his brother runs `doctor`, then `doctor --input --ask`, and sends the reports back.
 
 ## Open questions for Handren
-1. Who runs it on Windows and macOS: you on other machines, or other people? That decides how
-   much of P8.3 is needed and when.
+1. ~~Who runs it on Windows and macOS?~~ Answered 2026-11-17 for macOS: his brother, on his own
+   Mac, signed in to Claude Code with his own Claude account (answered 2026-11-17).
 2. Overlay on the new platforms: GTK for Wayland plus Qt for the rest (my recommendation), or
-   move everything to Qt?
+   move everything to Qt? Not answered. The seam was built on the recommendation, which leaves
+   the Linux overlay and panel as they are.
+3. For the Mac: which macOS version and chip, and how the app reaches him (a GitHub repository
+   he can clone, or an archive). The install note assumes Apple Silicon.

@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 # "claude-code": headless Claude Code CLI on your claude.ai subscription (no API key).
@@ -22,6 +23,8 @@ LOCAL_MODEL = os.environ.get("TUTOR_CLICK_LOCAL_MODEL", "")  # a vision model yo
 LOCAL_URL = os.environ.get("TUTOR_CLICK_LOCAL_URL", "http://localhost:11434/v1")  # Ollama's default
 # Providers the user has agreed to send screenshots to (see daemon._switch).
 CONSENT_FILE = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "tutor-click" / "providers.json"
+# The model and effort picked in the panel, per provider (see settings.py).
+SETTINGS_FILE = CONSENT_FILE.parent / "settings.json"
 # Longest edge of the screenshot sent to the model, in pixels.
 MAX_EDGE = int(os.environ.get("TUTOR_CLICK_MAX_EDGE", "1568"))
 # How many past exchanges are replayed as text each step (bounded).
@@ -47,7 +50,7 @@ NEVER_ACT = tuple(
     c.strip().lower()
     for c in os.environ.get(
         "TUTOR_CLICK_NEVER_ACT",
-        "kitty,foot,alacritty,wezterm,ghostty,konsole,xterm,gnome-terminal,com.anthropic.claude,claude",
+        "kitty,foot,alacritty,wezterm,ghostty,konsole,xterm,gnome-terminal,com.anthropic.claude,claude,terminal,iterm2,warp",
     ).split(",")
     if c.strip()
 )
@@ -58,6 +61,7 @@ LOG_FILE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) 
 # One JSON line per step and per action (see trace.py). Rotated once at this size.
 TRACE_FILE = LOG_FILE.parent / "trace.jsonl"
 TRACE_MAX_BYTES = 5_000_000
-RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "tutor-click"
+# Where the control socket lives. Without XDG_RUNTIME_DIR this is the temp folder, which on macOS is the user's own.
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "tutor-click"
 SOCKET = RUNTIME / "ctl.sock"
 LAYER_SHELL_LIB = "/usr/lib/libgtk4-layer-shell.so"

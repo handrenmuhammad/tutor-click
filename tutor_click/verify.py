@@ -5,17 +5,14 @@ change shows that something happened in the window, not that the right thing hap
 or an animation also counts). The useful direction is the other one: no change at all means the
 action very probably did not register.
 """
+import io
 import math
 from dataclasses import dataclass
 
-import gi
 import numpy as np
+from PIL import Image
 
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf
-
-from .hands import Window
-from .screen import Monitor, Shot
+from .platform.base import Monitor, Shot, Window
 
 # Measured on a Pinta window next to a busy one, 8 captures: every differing pixel was within 1 px
 # of the window's edge, where downscaling mixes in the neighbour. EDGE px further in, two captures
@@ -37,12 +34,7 @@ class Change:
 
 def pixels(jpeg: bytes) -> np.ndarray:
     """Decode to an array of shape (height, width, 3)."""
-    loader = GdkPixbuf.PixbufLoader.new_with_type("jpeg")
-    loader.write(jpeg)
-    loader.close()
-    pb = loader.get_pixbuf()
-    h, w, n, stride = pb.get_height(), pb.get_width(), pb.get_n_channels(), pb.get_rowstride()
-    return np.ndarray((h, w, n), dtype=np.uint8, buffer=pb.get_pixels(), strides=(stride, n, 1))[:, :, :3]
+    return np.asarray(Image.open(io.BytesIO(jpeg)).convert("RGB"))
 
 
 def window_rect(win: Window, mon: Monitor, shot: Shot) -> tuple[int, int, int, int]:

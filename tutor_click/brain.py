@@ -2,8 +2,8 @@
 from dataclasses import dataclass
 
 from . import config, providers
+from .platform.base import Shot
 from .providers import Provider, ProviderError
-from .screen import Shot
 
 SYSTEM = """You are Tutor Click, a patient teacher who shows the user how to use desktop \
 applications - Blender, Unity, Unreal Engine, GIMP, office apps, IDEs, anything on their screen - \
@@ -44,7 +44,9 @@ The "action" field:
 hold, e.g. "shift" or "ctrl+shift", else "".
 - "drag": press the left button at x, y and release at x2, y2. "keys" may hold modifiers.
 - "key": press the keys in "keys", a space-separated sequence of combos, e.g. "tab", "shift+a", \
-"g x 2 enter", "ctrl+z", "numpad1", "f2", "delete". With point true the mouse hovers at x, y first.
+"g x 2 enter", "ctrl+z", "numpad1", "f2", "delete". With point true the mouse hovers at x, y first. \
+Use the keys of the desktop named in the prompt: on macOS shortcuts take "cmd" and "option" where \
+Linux and Windows take "ctrl" and "alt".
 - "type": type the "text" (plain ASCII, no Enter) into the field that already has keyboard focus. \
 Click the field in an earlier step. Use a "key" step with "enter" to confirm.
 - "none": nothing to perform this turn.
@@ -158,6 +160,7 @@ class Tutor:
         self.history: list[tuple[str, str]] = []  # (what happened, tutor said + caption)
         self.asks: list[str] = []  # what the user themself said, kept apart so the goal never scrolls out
         self.concepts: list[str] = []  # what the lesson has taught so far, kept apart for the same reason
+        self.desktop = ""  # e.g. "macOS", so the model names the right keys
 
     def reset(self):
         self.history.clear()
@@ -187,6 +190,7 @@ class Tutor:
         asks = "\n".join(f"- {a}" for a in self.asks) or "(nothing yet)"
         prompt = (
             f"Screenshot size: {shot.width}x{shot.height} px.\n"
+            + (f"Desktop: {self.desktop}\n" if self.desktop else "") +
             f"Focused window: {window}\n"
             f"Mode: {mode}\n\n"
             f"What the user has asked for, oldest first:\n{asks}\n\n"

@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .. import config
+from .. import config, settings
 from .base import Cli, ProviderError, classify
 
 OFF = ("apps", "plugins", "browser_use", "computer_use")
@@ -23,9 +23,13 @@ class CodexCLI(Cli):
     billing = "subscription"
     paid_by = "your ChatGPT plan"
     sends_to = "OpenAI"
+    models = ()  # Codex's own default, or the one named in TUTOR_CLICK_CODEX_MODEL: its model names are not listed here
+    efforts = ("low", "medium", "high", "xhigh", "max")
+    model_env = "TUTOR_CLICK_CODEX_MODEL"
 
     def __init__(self):
         self.model = config.CODEX_MODEL
+        self.effort = settings.start(self.id, "effort", "TUTOR_CLICK_CODEX_EFFORT", config.CODEX_EFFORT)
 
     def _exe(self) -> str:
         return shutil.which("codex") or str(Path.home() / ".local/bin/codex")
@@ -50,11 +54,11 @@ class CodexCLI(Cli):
             cmd = [self._exe(), "exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
                    "-s", "read-only", "-C", str(empty), "-i", str(shot),
                    "--output-schema", str(schema_file), "-o", str(answer),
-                   "-c", f'model_reasoning_effort="{config.CODEX_EFFORT}"']
+                   "-c", f'model_reasoning_effort="{self.effort}"']
             for feature in OFF:
                 cmd += ["--disable", feature]
-            if config.CODEX_MODEL:
-                cmd += ["-m", config.CODEX_MODEL]
+            if self.model:
+                cmd += ["-m", self.model]
             cmd.append("-")  # prompt on stdin
             full = f"{system}\n\nAnswer with the JSON object only. Do not run commands or read files.\n\n{prompt}"
             p = self._run(cmd, full, empty)

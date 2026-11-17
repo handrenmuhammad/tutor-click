@@ -1,8 +1,10 @@
-"""Push-to-talk recording (pw-record), speech-to-text (faster-whisper), speech (Kokoro / espeak-ng)."""
+"""Push-to-talk recording, speech-to-text (faster-whisper) and speech (Kokoro).
+
+The microphone, the speaker and the fallback voice come from the desktop backend's `sound`.
+"""
 import contextlib
 import queue
 import re
-import signal
 import subprocess
 import threading
 from pathlib import Path
@@ -13,28 +15,21 @@ from . import config
 
 
 class Recorder:
-    def __init__(self):
+    def __init__(self, sound):
+        self.sound = sound
         self.path = config.RUNTIME / "ptt.wav"
         self.proc: subprocess.Popen | None = None
 
     def start(self):
         self.stop()
         self.path.unlink(missing_ok=True)
-        self.proc = subprocess.Popen(
-            ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16", str(self.path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        self.proc = self.sound.record(self.path)
 
     def stop(self) -> Path | None:
         proc, self.proc = self.proc, None
         if proc is None:
             return None
-        proc.send_signal(signal.SIGINT)  # lets pw-record finalize the WAV header
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        self.sound.stop_recording(proc)
         return self.path if self.path.exists() and self.path.stat().st_size > 44 else None
 
 
@@ -61,9 +56,10 @@ KOKORO_RATE = 24000
 
 
 class Speaker:
-    """Kokoro voice streamed sentence by sentence into paplay; espeak-ng if Kokoro is missing."""
+    """Kokoro voice streamed sentence by sentence into the desktop's player; its fallback voice if Kokoro is missing."""
 
-    def __init__(self):
+    def __init__(self, sound):
+        self.sound = sound
         self.proc: subprocess.Popen | None = None
         self._halt = threading.Event()
         self._kokoro = None
@@ -89,14 +85,11 @@ class Speaker:
         self._halt = halt
         engine = self._engine()
         if engine is None:
-            self._run(["espeak-ng", "-v", "en-us", "-s", "165", text])
+            self.proc = proc = self.sound.say(text)
+            proc.wait()
             return
 
-        proc = subprocess.Popen(
-            ["paplay", "--raw", f"--rate={KOKORO_RATE}", "--channels=1", "--format=s16le"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        self.proc = proc
+        self.proc = proc = self.sound.play_pcm(KOKORO_RATE)
         chunks: queue.Queue = queue.Queue()
 
         def feed():  # writes audio while the next sentence is being synthesized
@@ -105,7 +98,7 @@ class Speaker:
                     proc.stdin.write(pcm)
                     proc.stdin.flush()
                 proc.stdin.close()
-            except (BrokenPipeError, ValueError):  # stop() killed paplay
+            except (BrokenPipeError, ValueError):  # stop() killed the player
                 with contextlib.suppress(OSError):
                     proc.stdin.close()  # close now so GC doesn't retry the flush and print a warning
 
@@ -122,11 +115,6 @@ class Speaker:
         chunks.put(None)
         proc.wait()
         writer.join(timeout=1)
-
-    def _run(self, cmd):
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.proc = proc
-        proc.wait()
 
     def stop(self):
         self._halt.set()

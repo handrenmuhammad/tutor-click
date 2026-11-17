@@ -16,10 +16,10 @@ from test_brain import answer
 
 from tutor_click import config, providers
 from tutor_click.brain import SCHEMA, SYSTEM, Tutor
+from tutor_click.platform.base import Shot
 from tutor_click.providers import ProviderError
 from tutor_click.providers.base import classify
 from tutor_click.providers.openai_compat import LocalModel
-from tutor_click.screen import Shot
 
 SHOT = Shot(b"\xff\xd8 not really a jpeg", 1568, 656, 0.4558)
 
@@ -182,6 +182,37 @@ def test_codex_model_and_effort_come_from_the_settings(cli, monkeypatch):
     args = cli()["args"]
     assert args[args.index("-m") + 1] == "gpt-test"
     assert 'model_reasoning_effort="medium"' in args
+
+
+def test_claude_code_is_asked_for_the_model_and_effort_in_use(cli):
+    p = providers.create("claude-code")
+    assert (p.model, p.effort) == (config.MODEL, config.EFFORT)
+    p.model, p.effort = "claude-haiku-5-5", "low"
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "x")
+    args = cli()["args"]
+    assert (args[args.index("--model") + 1], args[args.index("--effort") + 1]) == ("claude-haiku-5-5", "low")
+
+
+def test_the_claude_api_is_asked_for_the_model_and_effort_in_use_and_haiku_gets_no_fallback(api):
+    p = make("api")
+    p.model, p.effort = "claude-sonnet-5-5", "low"
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "x")
+    sent = p._client.request
+    assert (sent["model"], sent["output_config"]["effort"], sent["fallbacks"]) == ("claude-sonnet-5-5", "low", "default")
+    p.model = "claude-haiku-5-5"
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "x")
+    assert p._client.request["model"] == "claude-haiku-5-5"
+    assert "fallbacks" not in p._client.request and "betas" not in p._client.request
+
+
+def test_every_provider_says_what_can_be_chosen():
+    for cls in providers.PROVIDERS.values():
+        assert all(isinstance(m, tuple) and len(m) == 2 for m in cls.models)
+        assert cls.model_env.startswith("TUTOR_CLICK_")
+        p = cls()
+        assert not cls.models or p.model in dict(cls.models)  # the default is one of the ones on offer
+        assert (p.effort in cls.efforts) if cls.efforts else p.effort == ""
+    assert [m for m, _ in providers.PROVIDERS["claude-code"].models] == ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
 
 
 def test_the_screenshot_does_not_outlive_the_codex_call(cli, monkeypatch):

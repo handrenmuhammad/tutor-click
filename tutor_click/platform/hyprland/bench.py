@@ -24,8 +24,10 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk
 
-from . import config, hands, screen
-from .hands import Hands, Refused, Window, parse_combo
+from ... import config
+from ..base import Refused, Window
+from . import hands, screen
+from .hands import Hands, parse_combo
 
 APP_ID = "dev.handren.TutorClick.probe"
 PROBE, DECOY = "Tutor probe", "Tutor probe decoy"

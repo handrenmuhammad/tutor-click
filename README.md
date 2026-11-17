@@ -34,7 +34,7 @@ Explain more, Do it for me, Stop, New lesson.
 | SUPER+ALT+Escape | stop talking and acting |
 
 Every command also works from a terminal: `tutor-click ask "..."`, `next`, `explain`, `do`,
-`mode guide|auto|toggle`, `stop`, `reset`, `status`, `quit`. Log: `~/.local/state/tutor-click/log`.
+`mode guide|auto|toggle`, `backend`, `model`, `effort`, `stop`, `reset`, `status`, `quit`. Log: `~/.local/state/tutor-click/log`.
 
 ## How it works
 
@@ -50,6 +50,14 @@ panel / hotkeys / CLI ──unix socket──► app (one lesson job at a time; 
 
 Each step sends one screenshot, your last 5 requests, the last 8 exchanges as text, and the names
 of up to 30 tools or ideas the lesson has already taught.
+
+Everything that touches the desktop sits in `tutor_click/platform/`: screenshots, windows, input,
+the overlay and panel, hotkeys, the microphone and speaker. The lesson loop, the checks, the
+voice models and the providers only see the backend that `platform.load()` returns:
+`platform/hyprland/`, or `platform/macos/` (see "macOS" below: written, not yet run on a Mac). On
+any other desktop the app says so and stops. The input guards (one app per lesson, never a
+terminal, focus and cursor checked before a press) are in `platform/hands.py` and are the same
+code on every desktop.
 
 ## How it checks its own actions
 
@@ -92,7 +100,7 @@ Kept: the newest 200 steps of a lesson (116 KiB at that size, about 2 ms to save
 - Can: click, double/right/middle click, drag, scroll the mouse wheel (up to 10 clicks per step),
   key combos and sequences (`g z 2 enter`), type ASCII text (US layout). No extra tools: clicks and
   keys use `hyprctl eval` (`cursor.move`, `send_key_state`, `send_shortcut`); the wheel uses the
-  wlr-virtual-pointer Wayland protocol, spoken directly from `tutor_click/wheel.py`.
+  wlr-virtual-pointer Wayland protocol, spoken directly from `tutor_click/platform/hyprland/wheel.py`.
 - Cannot: scroll while holding a modifier (Ctrl+wheel, Shift+wheel). It uses keyboard or menu
   alternatives, or asks you.
 - It acts only inside one app per lesson: the first app it acts in. Anything outside is refused
@@ -130,6 +138,36 @@ lists them with what each is missing.
 | `openai` | OpenAI API, `OPENAI_API_KEY` | you, per use, separate from a ChatGPT plan | OpenAI |
 | `gemini` | Gemini API, `GEMINI_API_KEY` | you, per use | Google |
 
+### Model and effort
+
+The panel has a **Model** and an **Effort** menu for the provider in use; `tutor-click model NAME` and
+`tutor-click effort LEVEL` do the same, and without a name they list what is on offer. A change
+applies from the next step and is remembered per provider in
+`~/.local/share/tutor-click/settings.json`. If `TUTOR_CLICK_MODEL` or `TUTOR_CLICK_EFFORT` is set
+when the app starts, it wins over what was remembered.
+
+- Claude (`claude-code`, `api`): Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; effort `low`,
+  `medium`, `high`, `xhigh`, `max`. The default is Opus 5.5 at `medium`.
+- Codex: effort only. Its model is Codex's own default, or `TUTOR_CLICK_CODEX_MODEL`.
+- `openai`, `gemini`, `local`: the model comes from their environment variable; no effort setting.
+
+Measured on 2026-11-17, pointing at 47 named Pinta controls (about 16 x 18 screenshot px each),
+three questions at a time, on the Claude subscription:
+
+| Model | Effort | Inside the control | Seconds per answer, median (p90) |
+|---|---|---|---|
+| Haiku 5.5 | low | 46 of 47 | 5.3 (6.7) |
+| Haiku 5.5 | medium | 46 of 47 | 5.5 (6.1) |
+| Opus 5.5 | low | 44 of 47 | 7.6 (11.2) |
+| Opus 5.5 | medium | 45 of 47 | 7.0 (9.8) |
+| Sonnet 5.5 | medium | 44 of 47 | 8.1 (10.0) |
+
+One control more or less out of 47 is noise, so pointing accuracy is the same across these, and
+`low` against `medium` shows no difference in either accuracy or speed. Haiku answers about two
+seconds sooner. What this does not measure is the lesson itself: choosing the right next step,
+noticing that a step did not work, labelling risk. Only Opus at `medium` has been through real
+lessons. Fable 5.2 and the efforts above `medium` are not measured.
+
 - The app never switches by itself. If a provider fails or runs out of quota it stops, says so,
   and names the others that are usable right now. A subscription is never swapped for a paid key.
 - The first time you pick a provider that sends screenshots somewhere new, it tells you where and
@@ -154,10 +192,47 @@ curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-fi
 
 ```bash
 uv pip install --python .venv/bin/python pytest
-.venv/bin/python -m pytest -q            # 185 tests, no desktop needed
+.venv/bin/python -m pytest -q            # 244 tests, no desktop needed
+.venv/bin/python -m tutor_click doctor   # checks screen, overlay, sound and provider on this machine
 .venv/bin/python -m tutor_click bench 100      # input delivery on a probe window, about 10 minutes
 .venv/bin/python tools/pointing.py       # pointing accuracy against an app's accessibility tree
 ```
+
+## macOS
+
+**Not run on a Mac yet.** It was written on Linux. What is tested here: the Qt overlay and panel
+(drawn off screen, and the real lesson loop run on them), the input guards, and the Mac key,
+window and capture logic against a stand-in for the system. What nothing here could test is
+`platform/macos/native.py`, the 120 lines that call macOS itself, and how macOS treats the windows
+(staying on top, letting clicks through, coming to the front).
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh      # uv, if it is not installed
+cd tutor-click
+uv venv --python 3.12 && uv pip install -e .
+```
+
+Install Claude Code and sign in to it with your own account (`claude`, then `/login`). Then:
+
+```bash
+.venv/bin/tutor-click doctor                  # says which permissions to switch on, and where
+.venv/bin/tutor-click doctor --input --ask    # also tests mouse and keyboard, and asks the AI once
+.venv/bin/tutor-click                         # the app
+```
+
+`doctor` checks one thing at a time and prints a report (also saved under
+`~/.local/state/tutor-click/`). Send that report back whatever it says: it names the part that
+failed. `--input` takes over the mouse and keyboard for a few seconds on a test window of its own.
+`--ask` sends one screenshot to the AI. Without them nothing leaves the computer.
+
+macOS asks for two permissions, both for the app Tutor Click is started from (Terminal, iTerm):
+Screen Recording and Accessibility, under System Settings > Privacy & Security. The first
+`doctor` run asks macOS to list the app there.
+
+Known gaps on macOS: no global hotkeys (every command is on the panel), `tutor-click type`,
+`install` and `bench` are not built, the overlay does not follow you into a full-screen app's own
+Space, and one wheel click is assumed to be three lines. Apple Silicon is assumed; whether every
+dependency installs on an Intel Mac is not known.
 
 ## Settings (env)
 
@@ -165,13 +240,13 @@ uv pip install --python .venv/bin/python pytest
 |---|---|---|
 | `TUTOR_CLICK_BACKEND` | `claude-code` | the provider the app starts with (see "Which AI answers") |
 | `TUTOR_CLICK_CODEX_MODEL` | Codex's default | |
-| `TUTOR_CLICK_CODEX_EFFORT` | `low` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `TUTOR_CLICK_CODEX_EFFORT` | `low` | `low`, `medium`, `high`, `xhigh`, `max`; outranks the Effort menu's remembered choice |
 | `TUTOR_CLICK_OPENAI_MODEL` | `gpt-6.2-astra` | |
 | `TUTOR_CLICK_GEMINI_MODEL` | none | must be set to use `gemini` |
 | `TUTOR_CLICK_LOCAL_MODEL` | none | a vision model you have pulled; must be set to use `local` |
 | `TUTOR_CLICK_LOCAL_URL` | `http://localhost:11434/v1` | Ollama's default address |
-| `TUTOR_CLICK_MODEL` | `claude-opus-5-5` | |
-| `TUTOR_CLICK_EFFORT` | `medium` | `low` is a little faster, `high` slower and more careful |
+| `TUTOR_CLICK_MODEL` | `claude-opus-5-5` | outranks the Model menu's remembered choice |
+| `TUTOR_CLICK_EFFORT` | `medium` | `low`, `medium`, `high`, `xhigh`, `max`; outranks the Effort menu's remembered choice |
 | `TUTOR_CLICK_MAX_EDGE` | `1568` | screenshot long edge sent to Claude |
 | `TUTOR_CLICK_WHISPER` | `base.en` | faster-whisper model; downloads from Hugging Face on first use |
 | `TUTOR_CLICK_VOICE` | `af_heart` | Kokoro voice: `am_michael`, `bf_emma`, `bm_george`, ... |

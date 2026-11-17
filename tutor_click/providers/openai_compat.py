@@ -23,6 +23,8 @@ class OpenAICompatible:
     model_env = ""
     url = ""
     model = ""
+    effort = ""  # the request sets no effort: these services differ in how they take one
+    models, efforts = (), ()  # the model comes from model_env; there is no list to offer
 
     def health(self) -> str | None:
         if not self.model:
