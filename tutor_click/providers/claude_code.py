@@ -2,6 +2,8 @@
 import base64
 import json
 import shutil
+import subprocess
+import threading
 from pathlib import Path
 
 from .. import config, settings
@@ -24,6 +26,11 @@ class ClaudeCode(Cli):
     def __init__(self):
         self.model = settings.start(self.id, "model", "TUTOR_CLICK_MODEL", config.MODEL)
         self.effort = settings.start(self.id, "effort", "TUTOR_CLICK_EFFORT", config.EFFORT)
+        # The command for the next step, started as soon as this one is answered and waiting for its
+        # input. Measured: 3.0 s per step against 3.9 s when it is started on demand. Each process
+        # still answers one question and exits, so nothing carries over from step to step.
+        self._ready: tuple[list[str], subprocess.Popen] | None = None
+        self._lock = threading.Lock()
 
     def _exe(self) -> str:
         # A desktop launcher may not have ~/.local/bin on PATH.
@@ -31,6 +38,37 @@ class ClaudeCode(Cli):
 
     def health(self) -> str | None:
         return None if Path(self._exe()).exists() else "the claude command is not installed"
+
+    def close(self):
+        """Stop the process that was started ahead, if any."""
+        with self._lock:
+            ready, self._ready = self._ready, None
+        if ready:
+            ready[1].kill()
+            ready[1].wait()
+
+    def abort(self) -> None:
+        super().abort()
+        self.close()  # the next step may be a different one
+
+    def _take(self, cmd: list[str]) -> tuple[subprocess.Popen | None, bool]:
+        """The process started ahead, if it is for this exact command and still alive."""
+        with self._lock:
+            ready, self._ready = self._ready, None
+        if ready and ready[0] == cmd and ready[1].poll() is None:
+            return ready[1], True
+        if ready:
+            ready[1].kill()
+            ready[1].wait()
+        return None, False
+
+    def _prepare(self, cmd: list[str]):
+        try:
+            proc = self._start(cmd, config.RUNTIME)
+        except (ProviderError, OSError):
+            return  # the next step starts it on demand and reports the problem
+        with self._lock:
+            self._ready = (cmd, proc)
 
     def ask(self, system: str, schema: dict, jpeg: bytes, prompt: str) -> dict:
         cmd = [
@@ -45,7 +83,11 @@ class ClaudeCode(Cli):
         ]
         image = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.standard_b64encode(jpeg).decode()}}
         msg = {"type": "user", "message": {"role": "user", "content": [image, {"type": "text", "text": prompt}]}}
-        p = self._run(cmd, json.dumps(msg) + "\n", config.RUNTIME)
+        ahead, was_ahead = self._take(cmd)
+        p = self._run(cmd, json.dumps(msg) + "\n", config.RUNTIME, proc=ahead)
+        if was_ahead and p.returncode != 0 and not p.stdout.strip():  # it died while it waited: ask a fresh one
+            p = self._run(cmd, json.dumps(msg) + "\n", config.RUNTIME)
+        self._prepare(cmd)
         result = None
         for line in p.stdout.splitlines():
             if line.startswith("{"):

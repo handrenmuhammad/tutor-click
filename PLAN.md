@@ -334,6 +334,13 @@ still shows the UI way.
     once its size and SHA-256 match. 254 tests. One real download here: both files, 115 MB, 93 s,
     identical to the ones this machine speaks with, and Kokoro loaded from them. Not yet seen on
     a Mac, including whether Kokoro itself runs there.
+  - 2026-11-18, from a photo of the Mac's own Claude session reading that Mac's log (relayed, not
+    seen by me): the tutor pressed Cmd+Space with Safari in front, the lesson was tied to Safari,
+    and every later action in Blender was refused as "outside Safari". Read in `platform/hands.py`:
+    keys with no point did claim the front app. Fixed for every desktop: only an action aimed at
+    a point in a window ties the lesson to an app; terminals are still refused. Also fixed for
+    macOS: keys now bring the lesson's app to the front first, since there a key goes to
+    whichever app is in front. 257 tests. Not yet rerun on the Mac.
 
 ## Open questions for Handren
 1. ~~Who runs it on Windows and macOS?~~ Answered 2026-11-17 for macOS: his brother, on his own

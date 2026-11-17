@@ -10,8 +10,9 @@ from pathlib import Path
 # "gemini": Gemini API with GEMINI_API_KEY. Billed by Google.
 # This is the provider the app starts with; `tutor-click backend NAME` or the panel switches while it runs.
 BACKEND = os.environ.get("TUTOR_CLICK_BACKEND", "claude-code")
-MODEL = os.environ.get("TUTOR_CLICK_MODEL", "claude-opus-5-5")
-EFFORT = os.environ.get("TUTOR_CLICK_EFFORT", "medium")  # low is faster, medium more careful
+# Haiku at low effort: measured as accurate at pointing as Opus and about two seconds faster per step.
+MODEL = os.environ.get("TUTOR_CLICK_MODEL", "claude-haiku-5-5")
+EFFORT = os.environ.get("TUTOR_CLICK_EFFORT", "low")
 # Codex: "" uses the Codex client's own default model (gpt-6.2-sol on 2026-11-17). Effort: low, medium, high, xhigh, max.
 CODEX_MODEL = os.environ.get("TUTOR_CLICK_CODEX_MODEL", "")
 CODEX_EFFORT = os.environ.get("TUTOR_CLICK_CODEX_EFFORT", "low")

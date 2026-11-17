@@ -2,6 +2,7 @@
 executable (real subprocesses), a local HTTP server for the OpenAI-style APIs, and a fake
 Anthropic client. No real service is called.
 """
+import gc
 import json
 import shutil
 import stat
@@ -19,6 +20,7 @@ from tutor_click.brain import SCHEMA, SYSTEM, Tutor
 from tutor_click.platform.base import Shot
 from tutor_click.providers import ProviderError
 from tutor_click.providers.base import classify
+from tutor_click.providers.claude_code import ClaudeCode
 from tutor_click.providers.openai_compat import LocalModel
 
 SHOT = Shot(b"\xff\xd8 not really a jpeg", 1568, 656, 0.4558)
@@ -29,7 +31,7 @@ args, mode = sys.argv[1:], os.environ.get("FAKE_MODE", "ok")
 name = os.path.basename(sys.argv[0])
 if args[:2] == ["login", "status"]:
     sys.exit(1 if mode == "logged_out" else 0)
-seen = {{"args": args, "stdin": sys.stdin.read(), "cwd": os.getcwd()}}
+seen = {{"args": args, "stdin": sys.stdin.read(), "cwd": os.getcwd(), "pid": os.getpid()}}
 if name == "codex":
     image, out = args[args.index("-i") + 1], args[args.index("-o") + 1]
     seen["image"] = open(image, "rb").read().decode("latin1")
@@ -65,7 +67,10 @@ def cli(tmp_path, monkeypatch):
     (tmp_path / "run").mkdir()
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "seen.json"))
     monkeypatch.setenv("FAKE_ANSWER", json.dumps(answer()))
-    return lambda: json.loads((tmp_path / "seen.json").read_text())
+    yield lambda: json.loads((tmp_path / "seen.json").read_text())
+    for obj in gc.get_objects():  # no process started ahead outlives its test
+        if isinstance(obj, ClaudeCode):
+            obj.close()
 
 
 class FakeAPI(ThreadingHTTPServer):
@@ -191,6 +196,52 @@ def test_claude_code_is_asked_for_the_model_and_effort_in_use(cli):
     p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "x")
     args = cli()["args"]
     assert (args[args.index("--model") + 1], args[args.index("--effort") + 1]) == ("claude-haiku-5-5", "low")
+
+
+def test_claude_code_starts_the_next_steps_process_ahead_and_uses_it(cli):
+    p = providers.create("claude-code")
+    assert p._ready is None  # nothing is started before the first question
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "one")
+    first = cli()["pid"]
+    waiting = p._ready[1]
+    assert waiting.poll() is None and waiting.pid != first  # started, waiting for its input
+    assert p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "two") == answer()
+    seen = cli()
+    assert seen["pid"] == waiting.pid  # the second question went to the one that was waiting
+    assert seen["stdin"].count("two") == 1 and "one" not in seen["stdin"]  # and it knows nothing of the first
+    assert p._ready[1].pid != waiting.pid and p._ready[1].poll() is None
+
+
+def test_a_waiting_process_for_another_model_is_not_used(cli):
+    p = providers.create("claude-code")
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "one")
+    stale = p._ready[1]
+    p.model = "claude-opus-5-5"
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "two")
+    seen = cli()
+    assert seen["pid"] != stale.pid and stale.poll() is not None  # stopped, never asked
+    assert seen["args"][seen["args"].index("--model") + 1] == "claude-opus-5-5"
+
+
+def test_a_waiting_process_that_died_is_replaced_without_the_user_noticing(cli):
+    p = providers.create("claude-code")
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "one")
+    p._ready[1].kill()
+    p._ready[1].wait()
+    assert p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "two") == answer()
+
+
+def test_interrupting_or_closing_leaves_no_claude_process_behind(cli):
+    p = providers.create("claude-code")
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "one")
+    waiting = p._ready[1]
+    p.abort()
+    assert waiting.poll() is not None and p._ready is None
+    p.ask(SYSTEM, SCHEMA, SHOT.jpeg, "two")
+    waiting = p._ready[1]
+    p.close()
+    assert waiting.poll() is not None and p._ready is None
+    p.close()  # twice is fine
 
 
 def test_the_claude_api_is_asked_for_the_model_and_effort_in_use_and_haiku_gets_no_fallback(api):

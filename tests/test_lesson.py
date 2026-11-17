@@ -839,3 +839,53 @@ def test_a_failed_fetch_is_said_and_left_for_the_next_start(make, monkeypatch):
     d._fetch_voice()
     said = "I could not get the natural voice: the download failed (Network is unreachable). I will try again at the next start."
     assert d.panel.calls[-1] == ("set_heard", (said,))
+
+
+# ---- speed: the next step is worked out while the last one is still being explained ----
+def test_the_tutor_looks_at_the_next_step_while_still_speaking_but_acts_and_points_only_after(make):
+    import threading
+
+    d = make([click(200, 100), click(300, 100), DONE], mode="auto")
+    still_talking, said = threading.Event(), []
+
+    def say(text):
+        said.append(text)
+        if text == "Click at 200.":
+            still_talking.wait(5)  # a long explanation of the first step
+
+    d.speaker.say = say
+    job = threading.Thread(target=lambda: d._lesson(d.job_id, "draw a line"))
+    job.start()
+    for _ in range(400):  # until the model has been asked about the second step
+        if len(d.tutor.asked) == 2:
+            break
+        time.sleep(0.01)
+    time.sleep(0.1)
+    assert len(d.tutor.asked) == 2  # asked while the first explanation is still going
+    assert d.hands.calls == [("click", 400.0, 200.0, "left", 1, "")]  # but the second click waits
+    assert sum(name == "show_step" for name, _ in d.overlay.calls) == 1  # and so does its pointer
+    assert said == ["Click at 200."]
+    still_talking.set()
+    job.join(5)
+    assert d.hands.calls == [("click", 400.0, 200.0, "left", 1, ""), ("click", 600.0, 200.0, "left", 1, "")]
+    assert said == ["Click at 200.", "Click at 300.", "All done."]
+
+
+def test_an_interruption_does_not_wait_for_the_explanation_to_end(make):
+    import threading
+
+    d = make([click(200, 100), click(300, 100)], mode="auto")
+    release = threading.Event()
+    d.speaker.say = lambda text: release.wait(5)
+    d.speaker.stop = release.set  # stopping the voice ends the explanation at once
+    out = []
+    job = threading.Thread(target=lambda: out.append(pytest.raises(daemon.Cancelled, d._lesson, d.job_id, "draw a line")))
+    job.start()
+    for _ in range(400):
+        if len(d.tutor.asked) == 2:
+            break
+        time.sleep(0.01)
+    d._cancel()
+    job.join(3)
+    assert not job.is_alive() and len(out) == 1
+    assert len(d.hands.calls) == 1

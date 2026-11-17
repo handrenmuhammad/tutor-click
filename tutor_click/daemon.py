@@ -106,6 +106,7 @@ class Daemon:
         self.trace_id = ""  # id of the step in self.last: "<lesson id>-<step number>"
         self.note = ""  # something the model must hear with the next event (an action that showed no effect)
         self.pending_backend = ""  # a provider the user picked once and has to pick again to confirm
+        self.talk: threading.Thread | None = None  # the explanation being spoken while the next step is worked out
         self.overlay = None
         self.panel = None
         self.hands = None
@@ -121,6 +122,7 @@ class Daemon:
             return self.app.run()
         finally:
             self.speaker.stop()
+            getattr(self.tutor.provider, "close", lambda: None)()  # a provider may hold a process ready for the next step
             self._binds(False)
             config.SOCKET.unlink(missing_ok=True)
 
@@ -335,7 +337,15 @@ class Daemon:
         self.overlay.set_status(key)
         self.panel.set_status(STATUS[key])
 
+    def _let_finish(self, my: int):
+        """Wait for the explanation that is still being spoken. Starting to speak again would cut it off."""
+        talk = self.talk
+        while talk is not None and talk.is_alive():
+            self._check(my)
+            talk.join(0.05)
+
     def _speak(self, my: int, text: str):
+        self._let_finish(my)
         self._check(my)
         self._status("speaking")
         self.speaker.say(text)
@@ -373,6 +383,7 @@ class Daemon:
         self._stop_everything()  # also aborts a call in flight on the old provider
         if leaves:
             consent.allow(want)
+        getattr(current, "close", lambda: None)()
         self.tutor.provider = new
         self.panel.set_backend(want)
         log("backend:", want)
@@ -550,6 +561,7 @@ class Daemon:
             "logical": point and [round(point[0], 1), round(point[1], 1)],
             "under_point": point and self._class_at(*point),
         })
+        self._let_finish(my)  # the pointer and caption stay on the step that is still being explained
         self.overlay.show_step(point, step.caption, step.say)
         self.panel.set_can_do(step.action != "none" and not step.done)
         return step, shot
@@ -632,9 +644,12 @@ class Daemon:
     def _perform(self, my: int, step: Step, shot: Shot, narrate: bool = True) -> tuple[Outcome, Shot | None]:
         """Speak the step while performing its action, then look at what it did.
 
-        Returns the outcome and the screenshot taken afterwards (None if nothing was sent).
+        Returns the outcome and the screenshot taken afterwards (None if nothing was sent). It does
+        not wait for the explanation to end: the next step is worked out while it is still being
+        spoken, and the next thing said or done waits for it (_let_finish).
         """
-        talk = threading.Thread(target=self._narrate, args=(my, step.say if narrate else ""), daemon=True)
+        self._let_finish(my)
+        self.talk = talk = threading.Thread(target=self._narrate, args=(my, step.say if narrate else ""), daemon=True)
         talk.start()
         before = []  # the screen at the last moment before the input goes out
         try:
@@ -648,12 +663,9 @@ class Daemon:
             log("refused:", e, "|", e.__cause__ or "")
             trace.write({"ev": "action", "id": self.trace_id, "outcome": "refused", "code": e.code, "reason": str(e), "detail": str(e.__cause__ or "")[:200]})
             self._outcome("failed", e.code)
-            talk.join()
             self._fail(my, str(e))
             return Outcome("failed", e.code), None
-        talk.join()
         self._check(my)
-        self._status("thinking")
         self._sleep(my, SETTLE_SECS)
         after = self._capture()
         change = verify.compare(before[0] if before else shot, after, verify.window_rect(win, self.monitor, after))

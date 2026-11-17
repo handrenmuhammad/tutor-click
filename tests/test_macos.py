@@ -315,8 +315,9 @@ def test_opening_an_app_through_the_launcher_does_not_tie_the_lesson_to_what_was
     assert [s[0] for s in mac.sent] == ["key", *["text"] * 5, "key"]
     h.click(300, 300)  # the first action aimed at a window is what ties it
     assert h.target == "Pinta"
+    mac.wins.insert(2, win(105, 7, "Preview", 0, 25, 900, 700))  # another app comes up over it
     with pytest.raises(Refused) as e:
-        h.click(400, 300 + 0) if mac.wins.insert(2, win(105, 7, "Preview", 0, 25, 900, 700)) else h.click(400, 300)
+        h.click(400, 300)
     assert e.value.code == "OUTSIDE_APP"
 
 

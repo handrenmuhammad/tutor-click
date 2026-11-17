@@ -70,11 +70,15 @@ class Cli:
         if proc is not None and proc.poll() is None:
             proc.kill()
 
-    def _run(self, cmd: list[str], stdin: str, cwd, timeout: int = 120) -> subprocess.CompletedProcess:
+    def _start(self, cmd: list[str], cwd) -> subprocess.Popen:
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
+            return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
         except FileNotFoundError as e:
             raise ProviderError(f"The {cmd[0].rsplit('/', 1)[-1]} command is not installed.", "not_installed") from e
+
+    def _run(self, cmd: list[str], stdin: str, cwd, timeout: int = 120, proc: subprocess.Popen | None = None) -> subprocess.CompletedProcess:
+        """proc: the command already started and waiting for its input, if one was started ahead."""
+        proc = proc or self._start(cmd, cwd)
         self._proc = proc
         try:
             out, err = proc.communicate(stdin, timeout=timeout)
