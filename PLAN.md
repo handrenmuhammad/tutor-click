@@ -157,7 +157,7 @@ Blender `bpy` and Unity for verification only ("is the object named X selected")
 still shows the UI way.
 
 ## Status
-- **P0 done, 2026-11-17** (except the git baseline, which is Handren's to make).
+- **P0 done, 2026-11-17.** Git baseline made by Handren after P2 (`b22d50a`), so P0 to P2 are one commit.
   - Tests: 72 pass, `ruff` clean.
   - Benchmark (`~/.local/state/tutor-click/bench/bench-20261117-213431.json`): 1,399 of 1,400 actions
     arrived exactly as sent. 100 each of click, double click, right click, drag, key combo,
@@ -225,8 +225,41 @@ still shows the UI way.
 - **Renamed to Tutor Click, 2026-11-17** (everything, at Handren's choice): command `tutor-click`,
   package `tutor_click`, settings `TUTOR_CLICK_*`, data in `~/.local/share/tutor-click` and
   `~/.local/state/tutor-click`, app id `dev.handren.TutorClick`. Tests pass and both live lessons
-  ran after the rename. Still to do, by Handren: move the folder to `~/Personal/tutor-click` and
-  rebuild `.venv` there (its paths are absolute).
+  ran after the rename. The folder is `~/Personal/tutor-click` and `.venv` was rebuilt there
+  (160 tests passed after the move).
+- **P3 done, 2026-11-17.** 185 tests, `ruff` clean. Sixteen deliberate breakages of the new logic
+  each make a test fail.
+  - Record (`tutor_click/lessons.py`): one JSON file per lesson in
+    `~/.local/share/tutor-click/lessons/`, holding the goal, the app, the step count, the tutor's
+    memory, and per step the caption, words, action, `expect`, risk, concept and outcome. Saved
+    after every step and every outcome: written in full, fsynced, renamed into place.
+  - Bounds, measured at the caps on `/home` (99% full): 200 steps per record is 116 KiB; a save
+    takes 2.0 ms median, 3.6 ms p99, 88.8 ms worst of 200; 50 records are 5.6 MiB; the start-up
+    lookup over all 50 takes 0.5 ms.
+  - Resume is offered, not automatic. At start the panel names the unfinished lesson; **Next step**
+    loads it (memory, step count, the one-app guard) and asks the model to look again. Any other
+    request starts a new lesson. **New lesson** closes the record. Only the newest record is ever
+    offered. Reason: loading it unasked would feed an old goal and an old app guard into whatever
+    the user asks next.
+  - The schema gains `concept`. The lesson's concepts (newest 30) are named in every prompt, so
+    they outlive the 8 exchanges of history.
+  - **Next step** in guide mode sends the step's `expect` and a measurement (did the window under
+    the step's point change since the step was given) and tells the model not to move on if the
+    screen does not show it. No second model call.
+  - Fixed on the way: a **Next step** press was counted as one of the user's requests, so five
+    presses pushed the goal out of the pinned list and eight out of the prompt altogether. Explain
+    and Do it for me are still counted that way.
+  - Live in Pinta, guide mode, Claude: step 1 given and recorded; **Next step** without doing it
+    was measured as no change and the tutor repeated the step with a hint ("the Pencil is still
+    the active tool"); `kill -9`; restart; the panel offered the lesson (seen in a screenshot of
+    the panel); **Next step** carried on as the same lesson at step 3 with its memory. Repeated
+    once: carried on at step 4. Both times Handren had done the step in Pinta in between, so the
+    tutor moved on. Giving the same step again after a restart is covered by the earlier
+    repeat-with-hint and by the unit test, not seen live after a restart.
+  - Not verified: resuming in tutor-clicks mode live; a power loss in the middle of a save; any
+    provider other than Claude with the new `concept` field against the real service.
+  - Seen, not fixed: after `kill -9` the hotkeys stay registered in Hyprland (the check ran with
+    `TUTOR_CLICK_BINDS=0`, so what a second registration does is untested).
 
 ## Open questions for Handren
 1. Who runs it on Windows and macOS: you on other machines, or other people? That decides how

@@ -5,7 +5,7 @@ import time
 import pytest
 from images import jpeg
 
-from tutor_click import config, consent, daemon, providers, screen
+from tutor_click import config, consent, daemon, lessons, providers, screen
 from tutor_click.brain import Step
 from tutor_click.hands import Refused, Window
 from tutor_click.providers import ProviderError
@@ -102,6 +102,7 @@ class FakeTutor:
         self.asked = []  # (event, mode, from_user)
         self.asked_of = []  # provider id for each ask
         self.on_step = None
+        self.restored = None  # the memory a resumed lesson handed back
         self.provider = FAKES["claude-code"]()
 
     def step(self, shot, window, event, mode, from_user=True):
@@ -120,6 +121,12 @@ class FakeTutor:
     def reset(self):
         pass
 
+    def memory(self):
+        return {"asks": [e for e, _, from_user in self.asked if from_user], "history": [], "concepts": []}
+
+    def restore(self, memory):
+        self.restored = memory
+
 
 class FakeHands:
     """Records each action. Like the real hands, it calls armed() just before the input goes out."""
@@ -135,6 +142,7 @@ class FakeHands:
         if armed:
             armed()
         self.calls.append(call)
+        self.target = PINTA.cls  # like the real hands: the first app acted in is the lesson's app
         return PINTA
 
     def click(self, x, y, button="left", count=1, mods="", armed=None):
@@ -417,7 +425,7 @@ def test_each_look_action_and_outcome_is_traced_under_one_id(make):
     d._lesson(d.job_id, "draw a line")
     lines = trace_lines()
     assert [(r["ev"], r["id"]) for r in lines] == [
-        ("step", f"{d.lesson}-1"), ("action", f"{d.lesson}-1"), ("outcome", f"{d.lesson}-1"), ("step", f"{d.lesson}-2"),
+        ("step", f"{d.record.id}-1"), ("action", f"{d.record.id}-1"), ("outcome", f"{d.record.id}-1"), ("step", f"{d.record.id}-2"),
     ]
     step, action, outcome, _ = lines
     assert step["action"] == "click"
@@ -520,10 +528,10 @@ def test_switching_mid_lesson_keeps_the_lesson_and_repeats_no_action(make):
     with pytest.raises(daemon.Cancelled):
         d._lesson(d.job_id, "draw a line")
     assert d.hands.calls == [("click", 400.0, 200.0, "left", 1, "")]
-    before = (d.lesson, d.step_n, d.mode)
+    before = (d.record.id, d.record.step_n, d.mode)
     d.tutor.on_step = None
     d._switch("codex yes")
-    assert (d.lesson, d.step_n, d.mode) == before  # same lesson, same place
+    assert (d.record.id, d.record.step_n, d.mode) == before  # same lesson, same place
     assert d.hands.calls == [("click", 400.0, 200.0, "left", 1, "")]  # switching performed nothing
     d._lesson(d.job_id, "Okay, continue.")
     assert d.tutor.asked_of == ["claude-code", "claude-code", "codex", "codex"]
@@ -568,3 +576,158 @@ def test_status_and_listing_name_the_provider(make):
     listing = json.loads(d._switch(""))
     assert listing["backend"] == "claude-code"
     assert listing["available"] == {"claude-code": "ok", "codex": "ok", "local": "ok", "api": "no ANTHROPIC_API_KEY is set", "openai": "ok"}
+
+
+# ---- lessons that persist --------------------------------------------------------
+def test_every_step_and_its_outcome_is_in_the_record_on_disk(make):
+    d = make([click(expect="The tool is selected.", concept="Rectangle tool"), DONE], mode="auto")
+    d._ask(d.job_id, "draw a rectangle")
+    saved = json.loads((config.LESSONS_DIR / f"{d.record.id}.json").read_text())
+    assert (saved["goal"], saved["app"], saved["step_n"], saved["done"], saved["closed"]) == ("draw a rectangle", "pinta", 2, True, False)
+    first, last = saved["steps"]
+    assert first == first | {"n": 1, "mode": "auto", "caption": "Click", "say": "Click at 200.", "action": "click at (200, 100)",
+                             "expect": "The tool is selected.", "concept": "Rectangle tool", "outcome": "verified", "code": ""}
+    assert (last["action"], last["outcome"]) == ("", "")  # nothing to perform, so nothing became of it
+    assert saved["memory"]["asks"] == ["draw a rectangle"]
+
+
+def test_held_refused_and_unconfirmed_steps_are_recorded_as_such(make):
+    def outcome_of(steps, hands=None, frozen=False):
+        d = make(steps, mode="auto", hands=hands)
+        d.screen.frozen = frozen
+        d._ask(d.job_id, "do it")
+        return d.record.steps[-1]["outcome"], d.record.steps[-1]["code"]
+
+    assert outcome_of([click(risk="sensitive")]) == ("held", "SENSITIVE")
+    assert outcome_of([click()], hands=FakeHands(refuse="I never click or type in kitty.", code="NEVER_ACT")) == ("failed", "NEVER_ACT")
+    assert outcome_of([click(repeat_safe=False)], frozen=True) == ("uncertain", "NO_VISIBLE_CHANGE")
+
+
+def test_a_killed_lesson_is_offered_at_the_next_start_and_next_step_takes_it_up(make):
+    d1 = make([click(200, 100), click(300, 100, wait_user=True)], mode="auto")
+    d1._ask(d1.job_id, "draw a rectangle")  # acts once, then waits for the user: the app dies here
+    d2 = make([click(300, 100), TALK])
+    assert d2.record.id != d1.record.id
+    d2._find_unfinished()
+    said = [args[0] for name, args in d2.panel.calls if name == "set_heard"]
+    assert said == ["Unfinished lesson: “draw a rectangle”, step 2. Press Next step to carry on, or ask for something new."]
+    assert d2.tutor.asked == []  # offering it asks the model nothing and loads nothing
+    assert d2.tutor.restored is None
+    d2._next(d2.job_id)
+    assert (d2.record.id, d2.record.step_n, d2.record.goal) == (d1.record.id, 3, "draw a rectangle")  # same lesson, next step number
+    assert d2.tutor.restored == d1.record.memory
+    assert d2.hands.target == "pinta"  # still the only app this lesson may act in
+    event, mode, from_user = d2.tutor.asked[0]
+    assert event.startswith("(From the app: Tutor Click was closed and has been started again.")
+    assert 'your last step, "Click"' in event
+    assert (mode, from_user) == ("guide", False)
+    assert d2.hands.calls == []  # taking it up performs nothing
+    assert [(r["ev"], r.get("id") or r["lesson"]) for r in trace_lines()[-2:]] == [("resume", d1.record.id), ("step", f"{d1.record.id}-3")]
+    assert d2.resumable is None
+    d2._next(d2.job_id)
+    assert d2.tutor.asked[1][0].startswith(daemon.NEXT_GUIDE)  # from here Next step is the ordinary one
+
+
+def test_asking_for_something_new_leaves_the_unfinished_lesson_behind(make):
+    d1 = make([click()])
+    d1._ask(d1.job_id, "draw a rectangle")
+    d2 = make([click()])
+    d2._find_unfinished()
+    d2._ask(d2.job_id, "teach me layers")
+    assert d2.resumable is None
+    assert d2.tutor.restored is None
+    assert d2.record.id != d1.record.id
+    assert lessons.resumable().goal == "teach me layers"  # the newer lesson is the one a restart would offer
+
+
+def test_new_lesson_closes_the_record_so_it_is_not_offered_again(make):
+    d = make([click()])
+    d._ask(d.job_id, "draw a rectangle")
+    old = d.record.id
+    d.dispatch("reset", "")
+    assert (d.record.id != old, d.record.step_n) == (True, 0)
+    assert lessons.resumable() is None
+    assert not (config.LESSONS_DIR / f"{d.record.id}.json").exists()  # an empty lesson writes nothing
+
+
+def test_new_lesson_also_closes_a_lesson_that_was_only_offered(make):
+    d1 = make([click()])
+    d1._ask(d1.job_id, "draw a rectangle")
+    d2 = make([])
+    d2._find_unfinished()
+    d2.dispatch("reset", "")
+    assert d2.resumable is None
+    assert lessons.resumable() is None
+
+
+def test_a_finished_lesson_is_not_offered(make):
+    d = make([DONE])
+    d._ask(d.job_id, "is that all?")
+    d2 = make([])
+    d2._find_unfinished()
+    assert d2.resumable is None
+    assert d2.panel.calls == []
+
+
+def test_a_long_goal_is_cut_short_in_the_offer(make):
+    d = make([click()])
+    d._ask(d.job_id, "Teach me how to draw a rectangle in Pinta. I will do every step myself.")
+    d2 = make([])
+    d2._find_unfinished()
+    offer = "Unfinished lesson: “Teach me how to draw a rectangle in Pinta. I…”, step 1. Press Next step to carry on, or ask for something new."
+    assert d2.panel.calls == [("set_heard", (offer,))]
+
+
+# ---- guide mode: Next step checks the step the user says they did ------------------
+def test_next_step_in_guide_mode_has_the_model_check_what_it_expected(make):
+    d = make([click(expect="The tool is selected."), TALK])
+    d._ask(d.job_id, "teach me the brush")
+    captures = d.screen.captures
+    d._next(d.job_id)
+    event, mode, from_user = d.tutor.asked[1]
+    assert event.startswith(daemon.NEXT_GUIDE + '\n(From the app: your last step expected: "The tool is selected."')
+    assert "Measured: the window it points at has changed since you gave it" in event
+    assert "give a hint for the same step" in event
+    assert (mode, from_user) == ("guide", False)
+    assert d.screen.captures == captures + 1  # the screenshot it measured on is the one the model gets
+    assert (d.record.steps[0]["outcome"], d.record.steps[0]["code"]) == ("reported", "")
+    assert d.hands.calls == []
+
+
+def test_next_step_says_so_when_the_window_looks_untouched(make):
+    d = make([click(expect="The tool is selected."), TALK])
+    d._ask(d.job_id, "teach me the brush")
+    d.screen.frozen = True
+    d._next(d.job_id)
+    assert "looks exactly as it did when you gave it, so the step has probably not been done" in d.tutor.asked[1][0]
+    assert (d.record.steps[0]["outcome"], d.record.steps[0]["code"]) == ("reported", "NO_VISIBLE_CHANGE")
+
+
+def test_next_step_measures_nothing_when_the_step_points_at_no_window(make):
+    d = make([Step("Press Control Z.", "Undo", None, False, "key", keys="ctrl+z", expect="The line is gone."), TALK])
+    d._ask(d.job_id, "undo that")
+    d._next(d.job_id)
+    event = d.tutor.asked[1][0]
+    assert 'expected: "The line is gone." Compare the screenshot' in event
+    assert "Measured" not in event
+
+
+def test_next_step_is_plain_after_an_explanation_and_in_auto_mode(make):
+    d = make([TALK, TALK])
+    d._ask(d.job_id, "what is this?")
+    d._next(d.job_id)
+    assert d.tutor.asked[1] == (daemon.NEXT_GUIDE, "guide", False)
+    d = make([click(expect="The tool is selected.", wait_user=True), TALK], mode="auto")
+    d._ask(d.job_id, "pick the brush")
+    d._next(d.job_id)
+    assert d.tutor.asked[1] == (daemon.NEXT_AUTO, "auto", False)
+
+
+def test_pressing_next_step_many_times_does_not_push_the_goal_out(make):
+    n = config.ASKS_KEPT + config.HISTORY_TURNS + 2
+    d = make([click(x=10 + i, expect="Something changes.") for i in range(n + 1)])
+    d._ask(d.job_id, "teach me the brush")
+    for _ in range(n):
+        d._next(d.job_id)
+    assert [from_user for _, _, from_user in d.tutor.asked] == [True] + [False] * n
+    assert d.record.memory["asks"] == ["teach me the brush"]

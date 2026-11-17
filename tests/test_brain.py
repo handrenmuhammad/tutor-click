@@ -1,4 +1,6 @@
 """What the model answers is checked and clamped before anything acts on it."""
+import json
+
 import pytest
 
 from tutor_click import config
@@ -13,7 +15,7 @@ def answer(**over) -> dict:
     base = {
         "say": "Click the brush.", "caption": "Pick the brush", "point": True, "x": 100, "y": 100,
         "action": "click", "x2": 0, "y2": 0, "keys": "", "text": "", "notches": 0,
-        "expect": "The brush button is highlighted.", "repeat_safe": True, "risk": "read_only",
+        "expect": "The brush button is highlighted.", "repeat_safe": True, "concept": "Paintbrush tool", "risk": "read_only",
         "wait_user": False, "done": False,
     }
     return base | over
@@ -174,7 +176,35 @@ def test_reset_forgets_the_lesson():
     t = FakeTutor(answer())
     t.step(SHOT, "pinta", "draw a circle", "guide")
     t.reset()
-    assert (t.history, t.asks) == ([], [])
+    assert (t.history, t.asks, t.concepts) == ([], [], [])
+
+
+def test_concepts_are_collected_once_named_in_the_prompt_and_bounded():
+    n = config.CONCEPTS_KEPT + 3
+    answers = [answer(concept=" Paintbrush tool "), answer(concept="Paintbrush tool"), answer(concept="")]
+    t = FakeTutor(*answers, *[answer(concept=f"idea {i}") for i in range(n)])
+    assert "Already taught in this lesson: (nothing yet)" in (t.step(SHOT, "pinta", "teach me", "guide"), t.provider.sent[0][3])[1]
+    t.step(SHOT, "pinta", "next", "guide", from_user=False)
+    t.step(SHOT, "pinta", "next", "guide", from_user=False)
+    assert t.concepts == ["Paintbrush tool"]
+    t.step(SHOT, "pinta", "next", "guide", from_user=False)
+    assert "Already taught in this lesson: Paintbrush tool\n" in t.provider.sent[3][3]
+    for _ in range(n - 1):
+        t.step(SHOT, "pinta", "next", "guide", from_user=False)
+    assert t.concepts == [f"idea {i}" for i in range(n - config.CONCEPTS_KEPT, n)]
+
+
+def test_a_restored_tutor_sends_the_same_prompt_as_the_one_that_was_saved():
+    a = FakeTutor(answer(), answer(concept="Layers"), answer())
+    a.step(SHOT, "pinta", "draw a circle", "guide")
+    a.step(SHOT, "pinta", "I did that. What's next?", "guide", from_user=False)
+    memory = json.loads(json.dumps(a.memory()))  # as it comes back from a lesson record
+    b = FakeTutor(answer())
+    b.restore(memory)
+    a.step(SHOT, "pinta", "and now?", "guide")
+    b.step(SHOT, "pinta", "and now?", "guide")
+    assert b.provider.sent[0][3] == a.provider.sent[2][3]
+    assert "Layers" in b.provider.sent[0][3]
 
 
 def test_describe():

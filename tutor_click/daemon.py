@@ -4,7 +4,6 @@ One lesson job runs at a time. Any new input (talking, typing, a button) cancels
 first, so the user can always interrupt.
 """
 import json
-import secrets
 import signal
 import socketserver
 import subprocess
@@ -19,7 +18,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk
 
-from . import config, consent, providers, screen, trace, verify
+from . import config, consent, lessons, providers, screen, trace, verify
 from .brain import Step, Tutor
 from .hands import Hands, Refused, Window, parse_mods
 from .overlay import MOVE_SECS, Overlay
@@ -31,6 +30,17 @@ NEXT_GUIDE = "I did that. What's next?"
 NEXT_AUTO = "Okay, continue."
 EXPLAIN = "Stop there. Explain that last step in more detail: what it does and why. Do not move on yet."
 DO_IT = "Please do this step for me."
+# Guide mode, Next step: the user says they did the step. The model checks that against what it expected.
+CHECK = ('(From the app: your last step expected: "{expect}"{measured} Compare the screenshot with that. If it does not '
+         "show it, do not move on: say what you see instead and give a hint for the same step.)")
+MEASURED = {
+    True: " Measured: the window it points at has changed since you gave it, which does not show the step was done right.",
+    False: " Measured: the window it points at looks exactly as it did when you gave it, so the step has probably not been done.",
+    None: "",  # nothing to measure: the step pointed at no window
+}
+RESUME = ("(From the app: Tutor Click was closed and has been started again. The lesson carries on, but time has passed and "
+          'the screen may have changed. It is not known whether the user did your last step, "{caption}". Look at the '
+          "screenshot: if that step is still needed, give it again. If it is already done, give the next one.)")
 SETTLE_SECS = 0.7  # let the app redraw after an action before the next screenshot
 MAX_RECORD_SECS = 60
 FRESH_SECS = 60  # "do it for me" reuses the step on screen only if it is this recent
@@ -98,9 +108,9 @@ class Daemon:
         self.recording = False
         self.rec_id = 0
         self.last: tuple[Step, screen.Shot, float] | None = None  # step on screen, its screenshot, when
-        self.lesson = secrets.token_hex(4)  # trace ids are "<lesson>-<step number>"
-        self.step_n = 0
-        self.trace_id = ""  # id of the step in self.last
+        self.record = lessons.Lesson()  # this lesson, as saved to disk after every step
+        self.resumable: lessons.Lesson | None = None  # the lesson left unfinished when the app last stopped
+        self.trace_id = ""  # id of the step in self.last: "<lesson id>-<step number>"
         self.note = ""  # something the model must hear with the next event (an action that showed no effect)
         self.pending_backend = ""  # a provider the user picked once and has to pick again to confirm
         self.overlay: Overlay | None = None
@@ -128,6 +138,7 @@ class Daemon:
         menu = [(pid, cls.menu) for pid, cls in providers.PROVIDERS.items()]
         self.panel = Panel(app, Overlay._gdk_monitor(self.monitor.name), self.monitor, self._from_panel, menu, self.tutor.provider.id)
         self.hands = Hands(self.monitor)
+        self._find_unfinished()
         app.hold()
         threading.Thread(target=self._serve, daemon=True).start()
         threading.Thread(target=self._warm, daemon=True).start()
@@ -212,9 +223,9 @@ class Daemon:
             if not text.strip():
                 return "nothing to ask"
             self.panel.set_heard(f"You: {text.strip()}")
-            return self._job(self._lesson, text.strip())
+            return self._job(self._ask, text.strip())
         elif cmd == "next":
-            return self._job(self._lesson, NEXT_AUTO if self.mode == "auto" else NEXT_GUIDE)
+            return self._job(self._next)
         elif cmd == "explain":
             return self._job(self._lesson, EXPLAIN, True, "never")
         elif cmd == "do":
@@ -240,7 +251,10 @@ class Daemon:
             self.tutor.reset()
             self.hands.reset()
             self.last = None
-            self.lesson, self.step_n = secrets.token_hex(4), 0
+            for old in (self.resumable, self.record):
+                if old:
+                    old.close()
+            self.record, self.resumable = lessons.Lesson(), None
             self.note = ""
             self.overlay.clear()
             self.panel.set_can_do(False)
@@ -249,7 +263,8 @@ class Daemon:
             self.panel.show()
         elif cmd == "status":
             return json.dumps({"mode": self.mode, "busy": self.busy.locked(), "recording": self.recording, "acting_in": self.hands.target,
-                               "backend": self.tutor.provider.id})
+                               "backend": self.tutor.provider.id, "lesson": self.record.id, "step": self.record.step_n,
+                               "unfinished": self.resumable.id if self.resumable else None})
         elif cmd == "point":  # debug: "x y caption" in logical px
             x, y, *caption = text.split(" ", 2)
             self.overlay.show_step((float(x), float(y)), " ".join(caption), "")
@@ -399,7 +414,63 @@ class Daemon:
             self.panel.set_heard("I didn't catch that. Try again, a little closer to the mic.")
             return
         self.panel.set_heard(f"You: {text}")
+        self._ask(my, text)
+
+    def _ask(self, my: int, text: str):
+        """The user's own words, typed or spoken."""
+        if not self.record.goal:
+            self.record.goal = text
         self._lesson(my, text)
+
+    def _next(self, my: int):
+        """Next step. After a restart it takes up the unfinished lesson. In guide mode it has the step the user says they did checked."""
+        if self.resumable:
+            self._resume(my)
+            return
+        step = self.last[0] if self.last else None
+        if self.mode == "auto" or step is None or step.action == "none" or not step.expect:
+            self._lesson(my, NEXT_AUTO if self.mode == "auto" else NEXT_GUIDE, False)
+            return
+        shot = self._capture()
+        changed = self._changed(step, self.last[1], shot)
+        self._outcome("reported", "NO_VISIBLE_CHANGE" if changed is False else "")
+        self._lesson(my, f"{NEXT_GUIDE}\n{CHECK.format(expect=step.expect, measured=MEASURED[changed])}", False, shot=shot)
+
+    def _changed(self, step: Step, before: screen.Shot, after: screen.Shot) -> bool | None:
+        """Whether the window under the step's point differs between two screenshots. None if there is no such window."""
+        if step.point is None:
+            return None
+        try:
+            win = self.hands.window_at(self.monitor.x + step.point[0] / before.factor, self.monitor.y + step.point[1] / before.factor)
+        except (subprocess.CalledProcessError, OSError, ValueError):  # hyprctl gone or bad JSON
+            return None
+        return win and verify.compare(before, after, verify.window_rect(win, self.monitor, after)).changed
+
+    # ---- lesson record -----------------------------------------------------
+    def _find_unfinished(self):
+        """At start: offer the lesson that was open when the app last stopped. Nothing is loaded until Next step."""
+        self.resumable = r = lessons.resumable()
+        if r:
+            goal = r.goal or r.steps[-1]["caption"]
+            goal = goal if len(goal) <= 45 else goal[:44].rstrip() + "…"  # the panel shows two lines
+            self.panel.set_heard(f"Unfinished lesson: “{goal}”, step {r.step_n}. Press Next step to carry on, or ask for something new.")
+
+    def _resume(self, my: int):
+        self.record, self.resumable = self.resumable, None
+        self.tutor.restore(self.record.memory)
+        self.hands.target = self.record.app or None  # the one-app-per-lesson guard carries over
+        log(f"resumed lesson {self.record.id} after step {self.record.step_n}")
+        trace.write({"ev": "resume", "lesson": self.record.id, "after_step": self.record.step_n})
+        self._lesson(my, RESUME.format(caption=self.record.steps[-1]["caption"]), False)
+
+    def _save(self):
+        self.record.memory = self.tutor.memory()
+        self.record.app = self.hands.target or ""
+        self.record.save()
+
+    def _outcome(self, status: str, code: str = ""):
+        self.record.outcome(status, code)
+        self._save()
 
     def _capture(self) -> screen.Shot:
         """Screenshot without our own overlay and panel in it."""
@@ -430,8 +501,9 @@ class Daemon:
         if step.point is not None:
             point = (step.point[0] / shot.factor, step.point[1] / shot.factor)
             self.panel.avoid(*point)
-        self.step_n += 1
-        self.trace_id = f"{self.lesson}-{self.step_n}"
+        self.record.add_step(step, mode)
+        self._save()
+        self.trace_id = f"{self.record.id}-{self.record.step_n}"
         m = self.monitor
         trace.write({
             "ev": "step", "id": self.trace_id, "mode": mode, "from_user": from_user,
@@ -462,6 +534,7 @@ class Daemon:
 
         shot: a screenshot taken a moment ago (after an action), used for the first look.
         """
+        self.resumable = None  # anything but Next step leaves the unfinished lesson behind
         if self.note:
             event, self.note = f"{event}\n(From the app, about your last action: {self.note})", ""
         last_sig, repeats = None, 0
@@ -475,6 +548,7 @@ class Daemon:
             if step.risk in HOLD:  # the model's wait_user should have caught this; do not rely on it
                 log(f"held ({step.risk}): {step.describe()}")
                 trace.write({"ev": "action", "id": self.trace_id, "outcome": "held", "code": step.risk.upper()})
+                self._outcome("held", step.risk.upper())
                 self._speak(my, step.say)
                 self.panel.set_heard(HOLD[step.risk])
                 self._speak(my, HOLD[step.risk])
@@ -503,6 +577,7 @@ class Daemon:
         step, shot, _ = self.last
         if step.risk == "irreversible":
             trace.write({"ev": "action", "id": self.trace_id, "outcome": "held", "code": "IRREVERSIBLE"})
+            self._outcome("held", "IRREVERSIBLE")
             self._fail(my, HOLD["irreversible"])
             return
         outcome, shot = self._perform(my, step, shot, narrate=False)
@@ -539,6 +614,7 @@ class Daemon:
         except Refused as e:
             log("refused:", e, "|", e.__cause__ or "")
             trace.write({"ev": "action", "id": self.trace_id, "outcome": "refused", "code": e.code, "reason": str(e), "detail": str(e.__cause__ or "")[:200]})
+            self._outcome("failed", e.code)
             talk.join()
             self._fail(my, str(e))
             return Outcome("failed", e.code), None
@@ -556,6 +632,7 @@ class Daemon:
         log(f"outcome: {outcome.status} {outcome.code} ({change.pixels} px changed, {change.fraction:.2%} of the window)")
         trace.write({"ev": "outcome", "id": self.trace_id, "status": outcome.status, "code": outcome.code,
                      "changed_px": change.pixels, "changed_frac": round(change.fraction, 5)})
+        self._outcome(outcome.status, outcome.code)
         return outcome, after
 
     def _narrate(self, my: int, text: str):

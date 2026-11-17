@@ -59,6 +59,9 @@ e.g. "The Rectangle tool button is highlighted". Empty when action is "none".
 (selecting a tool, opening a menu, clicking into a field, pressing Escape, scrolling). False if a \
 second time would add, duplicate, toggle, submit or remove something (drawing a shape, typing text, \
 pressing Enter in a dialog, clicking Add or OK, undo).
+- "concept": a few words naming the one new tool or idea this step introduces, e.g. "Rectangle \
+Select tool". Empty when the step teaches nothing new. The prompt lists the ones you have already \
+taught: build on them instead of explaining them again from the start.
 - "risk": what the action can cost the user.
   "read_only": only looks or navigates: opening a menu, switching a tab or tool, scrolling.
   "reversible": changes the document or scene in a way Undo takes back.
@@ -90,12 +93,13 @@ SCHEMA = {
         "notches": {"type": "integer"},
         "expect": {"type": "string"},
         "repeat_safe": {"type": "boolean"},
+        "concept": {"type": "string"},
         "risk": {"type": "string", "enum": list(RISKS)},
         "wait_user": {"type": "boolean"},
         "done": {"type": "boolean"},
     },
     "required": ["say", "caption", "point", "x", "y", "action", "x2", "y2", "keys", "text", "notches",
-                 "expect", "repeat_safe", "risk", "wait_user", "done"],
+                 "expect", "repeat_safe", "concept", "risk", "wait_user", "done"],
     "additionalProperties": False,
 }
 
@@ -130,6 +134,7 @@ class Step:
     expect: str = ""  # what should look different afterwards
     repeat_safe: bool = False  # a second, accidental run of this action would be harmless
     risk: str = "reversible"  # one of RISKS
+    concept: str = ""  # the new tool or idea this step introduces
 
     def describe(self) -> str:
         """Short text of the action, for the transcript sent back to the model."""
@@ -152,10 +157,22 @@ class Tutor:
         self.provider = provider or providers.create(config.BACKEND)
         self.history: list[tuple[str, str]] = []  # (what happened, tutor said + caption)
         self.asks: list[str] = []  # what the user themself said, kept apart so the goal never scrolls out
+        self.concepts: list[str] = []  # what the lesson has taught so far, kept apart for the same reason
 
     def reset(self):
         self.history.clear()
         self.asks.clear()
+        self.concepts.clear()
+
+    def memory(self) -> dict:
+        """Everything replayed to the model each step, in a form a lesson record can hold."""
+        return {"asks": list(self.asks), "history": [list(h) for h in self.history], "concepts": list(self.concepts)}
+
+    def restore(self, memory: dict):
+        """Take up a lesson where a record left it."""
+        self.asks = list(memory["asks"])[-config.ASKS_KEPT:]
+        self.history = [(u, t) for u, t in memory["history"]][-config.HISTORY_TURNS:]
+        self.concepts = list(memory["concepts"])[-config.CONCEPTS_KEPT:]
 
     def abort(self):
         """Stop a call that is in flight (the user interrupted)."""
@@ -173,6 +190,7 @@ class Tutor:
             f"Focused window: {window}\n"
             f"Mode: {mode}\n\n"
             f"What the user has asked for, oldest first:\n{asks}\n\n"
+            f"Already taught in this lesson: {', '.join(self.concepts) or '(nothing yet)'}\n\n"
             f"Recent conversation:\n{transcript}\n\n"
             f"Now: {event}"
         )
@@ -195,6 +213,7 @@ class Tutor:
             expect=data["expect"].strip(),
             repeat_safe=data["repeat_safe"],
             risk=data["risk"] if data["risk"] in RISKS else "sensitive",  # unknown label: treat as needing approval
+            concept=data["concept"].strip(),
         )
         if step.action in ("click", "double_click", "right_click", "middle_click", "drag", "scroll") and step.point is None:
             step.action = "none"  # nowhere valid to click
@@ -203,4 +222,7 @@ class Tutor:
         shown = f" [caption: {step.caption}]" + (f" [action: {step.describe()}]" if step.action != "none" else "")
         self.history.append((event, step.say + shown))
         del self.history[: -config.HISTORY_TURNS]
+        if step.concept and step.concept not in self.concepts:
+            self.concepts.append(step.concept)
+            del self.concepts[: -config.CONCEPTS_KEPT]
         return step

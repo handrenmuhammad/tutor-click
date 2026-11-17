@@ -15,12 +15,13 @@ USAGE = """usage: tutor-click [command]
   type              pop up a text prompt (fuzzel) and ask
   ptt-down|ptt-up   push-to-talk: start / stop recording
   next              guide mode: "I did that, what's next?"  auto mode: "continue"
+                    right after a start: carry on the lesson that was left unfinished
   explain           stop and explain the current step in more detail
   do                the tutor performs the current step for you
   mode guide|auto|toggle   who clicks: you (guide) or the tutor (auto)
   stop              stop speaking and acting, clear the overlay
-  reset             forget the lesson, start fresh
-  status            mode, busy, which app the tutor may act in, which AI is answering
+  reset             close the lesson for good, start fresh
+  status            mode, busy, which app the tutor may act in, which AI is answering, lesson and step
   backend [NAME]    switch the AI provider: claude-code, codex, local, api, openai, gemini. Without NAME, list them
   quit              close the app
   bench [N] [KINDS] measure input delivery on a probe window (takes over the mouse for a few minutes)"""

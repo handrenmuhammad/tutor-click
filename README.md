@@ -48,7 +48,8 @@ panel / hotkeys / CLI ──unix socket──► app (one lesson job at a time; 
                                         └─ hands: mouse/keyboard through Hyprland dispatchers (auto mode, "do")
 ```
 
-Each step sends one screenshot, your last 5 requests, and the last 8 exchanges as text.
+Each step sends one screenshot, your last 5 requests, the last 8 exchanges as text, and the names
+of up to 30 tools or ideas the lesson has already taught.
 
 ## How it checks its own actions
 
@@ -65,6 +66,26 @@ the tutor stops and asks you instead of trying again.
 
 Everything is recorded in `~/.local/state/tutor-click/trace.jsonl`: one line per look, per action and
 per outcome. `tutor-click bench` measures whether input arrives at all, on a probe window.
+
+## Lessons carry on after a restart
+
+Every lesson is saved to `~/.local/share/tutor-click/lessons/<id>.json` after each step and each
+outcome: what you asked for, each step (caption, what was said, the action, what it expected, its
+risk, the idea it taught), and what became of it (`verified`, `uncertain`, `failed`, `held`, or
+`reported` when you said you did it). The file is written in full and swapped into place, so a
+crash leaves the last complete record.
+
+When the app starts and the most recent lesson was left unfinished, the panel says so. **Next
+step** takes it up: the tutor gets its memory back, looks at the screen as it is now, and gives
+the step that is needed. Asking for anything else starts a new lesson and leaves the old one
+behind. **New lesson** closes a lesson for good. Nothing is sent to the AI until you choose.
+
+In "I click" mode, **Next step** tells the model what its last step expected and whether the
+window it pointed at has changed since, so it can say "that has not happened yet" and give a hint
+instead of moving on.
+
+Kept: the newest 200 steps of a lesson (116 KiB at that size, about 2 ms to save) and the newest
+50 lessons (5.6 MiB at most). Older ones are deleted.
 
 ## What the tutor's hands can and cannot do
 
@@ -133,7 +154,7 @@ curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-fi
 
 ```bash
 uv pip install --python .venv/bin/python pytest
-.venv/bin/python -m pytest -q            # 160 tests, no desktop needed
+.venv/bin/python -m pytest -q            # 185 tests, no desktop needed
 .venv/bin/python -m tutor_click bench 100      # input delivery on a probe window, about 10 minutes
 .venv/bin/python tools/pointing.py       # pointing accuracy against an app's accessibility tree
 ```
@@ -167,4 +188,7 @@ uv pip install --python .venv/bin/python pytest
 - Talking is push-to-talk (hold the key or click Talk). There is no always-open microphone.
 - The app is a launcher entry plus a `tutor-click` command that run from this folder's `.venv`.
   It is not a single self-contained binary.
+- A resumed lesson knows what was said, not what the screen looked like: the tutor looks again and
+  decides. Only the most recent lesson is ever offered.
+- Lesson records hold your requests and the tutor's words in plain text, readable by your user.
 - Per-app bridges (Blender bpy, Unity MCP) are later work.

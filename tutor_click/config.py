@@ -28,6 +28,12 @@ MAX_EDGE = int(os.environ.get("TUTOR_CLICK_MAX_EDGE", "1568"))
 HISTORY_TURNS = 8
 # How many of the user's own requests stay pinned (so the goal survives long auto runs).
 ASKS_KEPT = 5
+# How many ideas the lesson has taught stay named in the prompt (so they outlive HISTORY_TURNS).
+CONCEPTS_KEPT = 30
+# One JSON file per lesson (see lessons.py), so a lesson can carry on after a restart.
+LESSONS_DIR = CONSENT_FILE.parent / "lessons"
+LESSON_MAX_STEPS = 200  # steps kept in one record; older ones drop off
+LESSONS_KEPT = 50  # records kept; the oldest files are deleted
 WHISPER_MODEL = os.environ.get("TUTOR_CLICK_WHISPER", "base.en")
 # Kokoro neural TTS; falls back to espeak-ng when the model files are missing.
 KOKORO_DIR = Path.home() / ".local/share/tutor-click/kokoro"
