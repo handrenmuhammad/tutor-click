@@ -57,6 +57,8 @@ def parse_combo(combo: str) -> tuple[int, int]:
 
 
 class Hands(base.Hands):
+    keys_go_to_front = True
+
     def __init__(self, monitor):
         super().__init__(monitor)
         self._held = 0  # modifier flags of the button that is down, for the moves of a drag

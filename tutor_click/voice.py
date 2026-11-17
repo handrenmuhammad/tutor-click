@@ -3,10 +3,14 @@
 The microphone, the speaker and the fallback voice come from the desktop backend's `sound`.
 """
 import contextlib
+import hashlib
+import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +57,56 @@ class Transcriber:
 
 
 KOKORO_RATE = 24000
+# The Kokoro voice is too big for the repository, so the app fetches it the first time it starts.
+# name: (bytes, SHA-256), as published in the kokoro-onnx release these come from.
+KOKORO_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
+KOKORO_FILES = {
+    "kokoro-v1.0.int8.onnx": (92_361_271, "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb"),
+    "voices-v1.0.bin": (28_214_398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"),
+}
+SPARE_BYTES = 200_000_000  # disk space that must be left over after the download
+
+
+def missing_voice_files() -> list[str]:
+    return [name for name in KOKORO_FILES if not (config.KOKORO_DIR / name).exists()]
+
+
+def fetch_voice() -> str | None:
+    """Download the Kokoro files this computer lacks. None when all are in place, else why not, in a few words.
+
+    A file only gets its real name once it is whole and its checksum matches, so a download that
+    was cut short is never taken for the voice.
+    """
+    need = missing_voice_files()
+    try:
+        config.KOKORO_DIR.mkdir(parents=True, exist_ok=True)
+        if need and shutil.disk_usage(config.KOKORO_DIR).free < sum(KOKORO_FILES[n][0] for n in need) + SPARE_BYTES:
+            return "there is not enough free disk space"
+        for name in need:
+            _download(name)
+    except ValueError as e:
+        return str(e)
+    except OSError as e:  # no network, the server said no, the disk filled up
+        return f"the download failed ({getattr(e, 'reason', None) or e})"
+    return None
+
+
+def _download(name: str):
+    size, digest = KOKORO_FILES[name]
+    part = config.KOKORO_DIR / f"{name}.part"
+    seen = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(KOKORO_URL + name, timeout=30) as resp, part.open("wb") as f:
+            while chunk := resp.read(1 << 20):
+                seen.update(chunk)
+                f.write(chunk)
+                if f.tell() > size:
+                    raise ValueError(f"{name} is larger than it should be")
+        if seen.hexdigest() != digest:
+            raise ValueError(f"{name} did not arrive intact")
+        os.replace(part, config.KOKORO_DIR / name)
+    finally:
+        part.unlink(missing_ok=True)
 
 
 class Speaker:

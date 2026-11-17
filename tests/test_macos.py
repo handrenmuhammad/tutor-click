@@ -303,3 +303,41 @@ def test_permissions_name_what_is_off_and_ask_macos_to_list_the_app(mac):
     assert [(what.split(" (")[0], granted) for what, granted, _ in listed] == [("Screen Recording", False), ("Accessibility", False)]
     assert all("System Settings > Privacy & Security" in how for _, _, how in listed)
     assert mac.asked == 1
+
+
+# ---- the lesson's app (found on a real Mac, 2026-11-18) -----------------------------
+def test_opening_an_app_through_the_launcher_does_not_tie_the_lesson_to_what_was_in_front(mac):
+    h = make()  # Finder is in front; the lesson is about Pinta, which the tutor opens itself
+    h.keys("cmd+space")
+    h.type_text("Pinta")
+    h.keys("enter")
+    assert h.target is None  # keys with no point say nothing about where the lesson is
+    assert [s[0] for s in mac.sent] == ["key", *["text"] * 5, "key"]
+    h.click(300, 300)  # the first action aimed at a window is what ties it
+    assert h.target == "Pinta"
+    with pytest.raises(Refused) as e:
+        h.click(400, 300 + 0) if mac.wins.insert(2, win(105, 7, "Preview", 0, 25, 900, 700)) else h.click(400, 300)
+    assert e.value.code == "OUTSIDE_APP"
+
+
+def test_keys_before_any_lesson_app_still_never_go_to_a_terminal(mac):
+    mac.front = (102, "Terminal")
+    with pytest.raises(Refused) as e:
+        make().keys("cmd+space")
+    assert e.value.code == "NEVER_ACT"
+    assert mac.sent == []
+
+
+def test_keys_bring_the_lesson_app_forward_when_another_app_has_the_keyboard(mac):
+    h = make()
+    h.click(300, 300)  # the lesson is Pinta's, and Pinta is in front
+    mac.front = (103, "Finder")  # the user clicked elsewhere
+    mac.sent.clear()
+    h.keys("cmd+z")
+    assert mac.sent == [("activate", 101), ("key", 6, CMD)]
+    mac.front, mac.activation_works = (103, "Finder"), False
+    mac.sent.clear()
+    with pytest.raises(Refused) as e:
+        h.keys("cmd+z")
+    assert e.value.code == "WINDOW_NOT_FOCUSED"
+    assert ("key", 6, CMD) not in mac.sent  # nothing was typed into Finder

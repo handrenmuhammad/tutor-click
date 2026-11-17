@@ -328,7 +328,12 @@ still shows the UI way.
   - Next: his brother runs `doctor`, then `doctor --input --ask`, and sends the reports back.
   - 2026-11-18, reported by Handren, no report or log seen by me: the app ran on the Mac and
     spoke with the system voice, because the Kokoro files were not there (the install note had
-    left that step out; added). What worked beyond starting and speaking is not known yet.
+    left that step out). What worked beyond starting and speaking is not known yet.
+  - 2026-11-18: the voice now downloads on first start (Handren's choice over putting the files
+    in git). `voice.fetch_voice()` writes each file under a temporary name and only renames it
+    once its size and SHA-256 match. 254 tests. One real download here: both files, 115 MB, 93 s,
+    identical to the ones this machine speaks with, and Kokoro loaded from them. Not yet seen on
+    a Mac, including whether Kokoro itself runs there.
 
 ## Open questions for Handren
 1. ~~Who runs it on Windows and macOS?~~ Answered 2026-11-17 for macOS: his brother, on his own

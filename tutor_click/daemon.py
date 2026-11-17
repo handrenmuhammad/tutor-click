@@ -16,7 +16,7 @@ from . import config, consent, lessons, platform, providers, settings, trace, ve
 from .brain import Step, Tutor
 from .platform.base import Monitor, Refused, Shot, Window
 from .providers import ProviderError
-from .voice import Recorder, Speaker, Transcriber
+from .voice import Recorder, Speaker, Transcriber, fetch_voice, missing_voice_files
 
 NEXT_GUIDE = "I did that. What's next?"
 NEXT_AUTO = "Okay, continue."
@@ -137,8 +137,20 @@ class Daemon:
         p = self.tutor.provider
         log(f"app on {self.monitor.name}, provider {p.id} (model {p.model or 'default'}, effort {p.effort or 'none'}), hotkeys {'on' if config.BINDS else 'off'}")
 
+    def _fetch_voice(self):
+        """First start on this computer: get the natural voice. Until it is here the desktop's own voice speaks."""
+        if not missing_voice_files():
+            return
+        self.panel.set_heard("Downloading the natural voice, about 115 MB. Until it is here I speak with the system voice.")
+        log("voice: downloading")
+        problem = fetch_voice()
+        log("voice:", problem or "downloaded")
+        self.panel.set_heard(f"I could not get the natural voice: {problem}. I will try again at the next start." if problem
+                             else "The natural voice is ready.")
+
     def _warm(self):
         """Load the speech models now so the first question is not slow."""
+        self._fetch_voice()
         t0 = time.monotonic()
         self.speaker.warm()
         self.transcriber.warm()

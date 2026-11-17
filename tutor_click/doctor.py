@@ -272,7 +272,7 @@ def _voices() -> str:
     missing = [name for name in ("faster_whisper", "kokoro_onnx") if importlib.util.find_spec(name) is None]
     if missing:
         raise Problem(f"not installed: {', '.join(missing)}")
-    return f"speech-to-text and the voice engine are installed; Kokoro voice files {'found' if kokoro else 'MISSING, so the system voice is used'} in {config.KOKORO_DIR}"
+    return f"speech-to-text and the voice engine are installed; Kokoro voice files {'found' if kokoro else 'not there yet (the app downloads them the first time it starts; until then the system voice speaks)'} in {config.KOKORO_DIR}"
 
 
 def _provider(seen) -> str:

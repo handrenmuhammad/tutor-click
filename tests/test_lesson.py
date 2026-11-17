@@ -816,3 +816,26 @@ def test_switching_provider_shows_that_providers_choices(make, choosy):
     d = make([TALK])
     d._switch("codex yes")
     assert choices(d) == ([("", "its own default")], "", ["low", "medium", "high"], "medium")
+
+
+# ---- the natural voice, first start ------------------------------------------------
+def test_the_first_start_fetches_the_voice_and_says_so(make, monkeypatch):
+    d = make([TALK])
+    missing = [["kokoro.onnx"]]
+    monkeypatch.setattr(daemon, "missing_voice_files", lambda: missing[0])
+    monkeypatch.setattr(daemon, "fetch_voice", lambda: missing.__setitem__(0, []))
+    d._fetch_voice()
+    heard = [args[0] for name, args in d.panel.calls if name == "set_heard"]
+    assert heard == ["Downloading the natural voice, about 115 MB. Until it is here I speak with the system voice.", "The natural voice is ready."]
+    d.panel.calls.clear()
+    d._fetch_voice()  # every later start: nothing to do, nothing said
+    assert d.panel.calls == []
+
+
+def test_a_failed_fetch_is_said_and_left_for_the_next_start(make, monkeypatch):
+    d = make([TALK])
+    monkeypatch.setattr(daemon, "missing_voice_files", lambda: ["voices.bin"])
+    monkeypatch.setattr(daemon, "fetch_voice", lambda: "the download failed (Network is unreachable)")
+    d._fetch_voice()
+    said = "I could not get the natural voice: the download failed (Network is unreachable). I will try again at the next start."
+    assert d.panel.calls[-1] == ("set_heard", (said,))

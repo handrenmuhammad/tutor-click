@@ -180,7 +180,12 @@ lessons. Fable 5.2 and the efforts above `medium` are not measured.
 - Measured on 47 named Pinta controls: Claude Opus (medium) 45 hits, about 7 s per answer; Codex
   gpt-6.2-sol (low) 45 hits, about 10 s per answer.
 
-Voice model (Kokoro int8, ~120 MB total) goes in `~/.local/share/tutor-click/kokoro/`:
+The natural voice (Kokoro int8, two files, 115 MB together) is too big for the repository. The
+first time the app starts on a computer it downloads them to `~/.local/share/tutor-click/kokoro/`
+and says so in the panel; that took 93 s on the connection it was tried on. Each file is checked
+against its size and checksum before it is used, and a failed download is tried again at the next
+start. Until the files are there the tutor speaks with the system voice (`espeak-ng` on Linux,
+`say` on macOS). To fetch them by hand instead:
 
 ```bash
 mkdir -p ~/.local/share/tutor-click/kokoro && cd ~/.local/share/tutor-click/kokoro
@@ -219,14 +224,8 @@ the folder, then `uv pip install -e .` again if the fix adds dependencies.
 
 Install Claude Code and sign in to it with your own account (`claude`, then `/login`).
 
-The natural voice is not in the repository (about 120 MB). Without these two files the tutor
-speaks with the Mac's own `say` voice:
-
-```bash
-mkdir -p ~/.local/share/tutor-click/kokoro && cd ~/.local/share/tutor-click/kokoro
-curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
-curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
-```
+The natural voice downloads by itself the first time the app starts (see "Setup"). Until it is
+there, the tutor speaks with the Mac's own `say` voice.
 
 Then, from the `tutor-click` folder:
 

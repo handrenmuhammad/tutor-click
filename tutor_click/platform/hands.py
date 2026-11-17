@@ -15,6 +15,8 @@ DRAG_STEPS = 12
 
 
 class Hands:
+    keys_go_to_front = False  # True where a key press reaches whichever app is in front, not a window we name
+
     def __init__(self, monitor):
         self.monitor = monitor
         self.target: str | None = None  # window class this lesson is allowed to act in
@@ -32,7 +34,13 @@ class Hands:
         win = self._active()
         return win if win and self._is_open(win) else None
 
-    def _allow(self, win: Window | None) -> Window:
+    def _allow(self, win: Window | None, claim: bool = True) -> Window:
+        """claim=False checks the window without making its app the lesson's app.
+
+        Keys pressed with no point (a system shortcut such as the app launcher) land in whatever
+        is in front, which says nothing about where the lesson is. Only an action aimed at a
+        point in a window ties the lesson to that app.
+        """
         if win is None:
             raise Refused("There is no app window there for me to use. Please do this step yourself.", "NO_WINDOW")
         if not self._known(win):
@@ -41,6 +49,8 @@ class Hands:
         if cls in config.NEVER_ACT:
             raise Refused(f"I never click or type in {win.cls}. Please do this step yourself.", "NEVER_ACT")
         if self.target is None:
+            if not claim:
+                return win
             self.target = win.cls
         elif cls != self.target.lower():
             raise Refused(f"That is outside {self.target}, where this lesson works. Please do this step yourself.", "OUTSIDE_APP")
@@ -137,7 +147,11 @@ class Hands:
     def _hover_window(self, hover, armed=None) -> Window:
         """Many apps (Blender) send shortcuts to the area under the mouse, so hover there first."""
         if hover is None:
-            win = self._allow(self._current())
+            win = self._allow(self._current(), claim=False)
+            if self.keys_go_to_front and not self._is_front(win):  # the lesson's app is open but another one has the keyboard
+                self._focus(win)
+                if not self._is_front(win):
+                    raise Refused("I could not bring that window to the front. Click it once, then ask me again.", "WINDOW_NOT_FOCUSED")
             if armed:
                 armed()
             return win
