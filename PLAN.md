@@ -326,6 +326,9 @@ still shows the UI way.
   - Not built for macOS: global hotkeys, `type`, `install`, `bench`, the overlay on a full-screen
     app's Space.
   - Next: his brother runs `doctor`, then `doctor --input --ask`, and sends the reports back.
+  - 2026-11-18, reported by Handren, no report or log seen by me: the app ran on the Mac and
+    spoke with the system voice, because the Kokoro files were not there (the install note had
+    left that step out; added). What worked beyond starting and speaking is not known yet.
 
 ## Open questions for Handren
 1. ~~Who runs it on Windows and macOS?~~ Answered 2026-11-17 for macOS: his brother, on his own

@@ -217,7 +217,18 @@ While the repository is private, the clone needs a GitHub account that has been 
 is signed in on the Mac (GitHub's `gh` command does both). To get a later fix, run `git pull` in
 the folder, then `uv pip install -e .` again if the fix adds dependencies.
 
-Install Claude Code and sign in to it with your own account (`claude`, then `/login`). Then:
+Install Claude Code and sign in to it with your own account (`claude`, then `/login`).
+
+The natural voice is not in the repository (about 120 MB). Without these two files the tutor
+speaks with the Mac's own `say` voice:
+
+```bash
+mkdir -p ~/.local/share/tutor-click/kokoro && cd ~/.local/share/tutor-click/kokoro
+curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
+curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+```
+
+Then, from the `tutor-click` folder:
 
 ```bash
 .venv/bin/tutor-click doctor                  # says which permissions to switch on, and where
