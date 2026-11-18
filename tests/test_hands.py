@@ -342,3 +342,27 @@ def test_key_names_cannot_carry_lua(hypr):
         hands._key_call("", 'A"}) os.exit(')
     with pytest.raises(Refused):
         hands._key_call('CTRL"', "A")
+
+
+# ---- keys as a model writes them (seen on GNOME, 2026-11-18: "I don't know the key period") ----
+def test_a_symbol_named_in_words_and_a_number_in_one_piece_are_pressed_key_by_key(hypr):
+    h = make()
+    h.click(100, 200)
+    hypr.evals.clear()
+    h.keys("s y 0 period 3 enter")
+    h.keys("s y 0.3 enter")
+    h.keys("ctrl+comma")
+    keys = [re.search(r'mods="([A-Z ]*)",key="(\w+)"', e).groups() for e in hypr.evals if "send_shortcut" in e]
+    one = [("", "S"), ("", "Y"), ("", "0"), ("", "period"), ("", "3"), ("", "Return")]
+    assert keys == [*one, *one, ("CTRL", "comma")]
+
+
+def test_a_word_that_is_no_key_is_still_refused_before_anything_is_pressed(hypr):
+    h = make()
+    h.click(100, 200)
+    hypr.evals.clear()
+    for bad in ("s y flatten enter", "ctrl+nosuchkey", "a é"):
+        with pytest.raises(Refused) as e:
+            h.keys(bad)
+        assert e.value.code == "UNKNOWN_KEY"
+    assert hypr.evals == []

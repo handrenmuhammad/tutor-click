@@ -3,6 +3,7 @@
 A backend subclasses Hands and supplies the primitives at the bottom: finding windows, focusing,
 moving the cursor, pressing, scrolling, sending keys. Nothing above them knows the desktop.
 """
+import re
 import time
 
 from .. import config
@@ -12,6 +13,13 @@ MAX_TYPE_CHARS = 200
 MAX_KEYS = 12
 CURSOR_TOL = 2  # px the cursor may be off its target when the press is about to go out
 DRAG_STEPS = 12
+_NUMBER = re.compile(r"-?\d*\.?\d+")  # a value typed into a field or a tool: 0.3, -90, .5
+# Names a model may give a symbol key instead of the symbol itself ("s y 0 period 3 enter").
+SYMBOL_NAMES = {
+    "period": ".", "dot": ".", "comma": ",", "minus": "-", "hyphen": "-", "equal": "=", "equals": "=", "slash": "/",
+    "backslash": "\\", "semicolon": ";", "apostrophe": "'", "quote": "'", "grave": "`", "backtick": "`",
+    "bracketleft": "[", "bracketright": "]",
+}
 
 
 class Hands:
@@ -127,7 +135,7 @@ class Hands:
 
     def keys(self, sequence: str, hover: tuple[float, float] | None = None, armed=None) -> Window:
         """sequence: combos separated by spaces, e.g. 'tab' or 'g x 2 enter' or 'ctrl+shift+a'."""
-        combos = [self._combo(c) for c in sequence.split()]
+        combos = [combo for token in sequence.split() for combo in self._combos(token)]
         if not 0 < len(combos) <= MAX_KEYS:
             raise Refused("That is too many keys for one step.", "TOO_LONG")
         win = self._hover_window(hover, armed)
@@ -135,6 +143,22 @@ class Hands:
             self._tap(combo, win)
             time.sleep(0.06)
         return win
+
+    def _combos(self, token: str) -> list:
+        """One word of a key sequence, as the backend's key presses.
+
+        Usually that is one press. A symbol may come by name ("period"), and a value may come in
+        one piece ("0.3"), which is its characters pressed in turn. Only numbers are spelled out.
+        """
+        *mods, key = token.split("+") if not token.endswith("+") else [token]
+        if key.lower() in SYMBOL_NAMES:
+            token = "+".join([*mods, SYMBOL_NAMES[key.lower()]])
+        try:
+            return [self._combo(token)]
+        except Refused:
+            if not _NUMBER.fullmatch(token):  # a word spelled out key by key would fire one shortcut per letter
+                raise
+            return [self._combo(ch) for ch in token]
 
     def type_text(self, text: str, hover: tuple[float, float] | None = None, armed=None) -> Window:
         if not 0 < len(text) <= MAX_TYPE_CHARS:

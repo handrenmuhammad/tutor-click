@@ -330,3 +330,23 @@ def test_without_the_flag_or_without_a_test_window_the_input_check_is_left_out()
         doctor._input(SimpleNamespace(), None, {}, False)
     with pytest.raises(doctor.Skip, match="tutor-click bench"):
         doctor._input(SimpleNamespace(), None, {}, True)
+
+
+def test_no_button_label_is_cut_off_whatever_the_desktop_font(app):
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import QPushButton
+
+    before = app.qt.font()
+    try:
+        for family, size in (("Adwaita Sans", 11), ("DejaVu Sans", 14), ("Sans", 9)):  # GNOME's own font, a wide one, a small one
+            app.qt.setFont(QFont(family, size))
+            _, panel = qt.make_ui(app, qt.focused_monitor(), lambda *_: None, BACKENDS, "claude-code")
+            end = time.monotonic() + 0.1
+            while time.monotonic() < end:
+                app.qt.processEvents()
+            narrow = [(b.text(), b.width(), b.sizeHint().width()) for b in panel.findChildren(QPushButton) if b.width() < b.sizeHint().width()]
+            assert narrow == [], (family, size, narrow)
+            assert panel.width() >= 470
+            panel.close()
+    finally:
+        app.qt.setFont(before)
