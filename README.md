@@ -1,9 +1,17 @@
 # Tutor Click
 
-A screen tutor for Hyprland. Tell it what you want to learn ("rig a hand in Blender", "make a
-pivot table"), by voice or text. It looks at your screen, points at the exact control, shows a
+A screen tutor for Linux and macOS. Tell it what you want to learn ("rig a hand in Blender", "make
+a pivot table"), by voice or text. It looks at your screen, points at the exact control, shows a
 caption and subtitle, and explains each step out loud. It works with any app, because it only
 looks at pixels.
+
+| Runs on | State | Set-up |
+|---|---|---|
+| Linux, Hyprland (Wayland) | the desktop it was built on; every part measured there | "Setup" |
+| Linux, GNOME 51 (Wayland) | starts, teaches and passes `doctor`; the tutor's own clicks and typing are not yet confirmed on a real session | "GNOME" |
+| macOS | starts, teaches and presses keys on one Mac; clicks not yet confirmed; no global hotkeys | "macOS" |
+
+On any other desktop it says so and stops. `tutor-click doctor` checks what works on yours.
 
 Two modes, switchable at any time:
 
@@ -24,13 +32,15 @@ tutor-click            # or pick "Tutor Click" in your app launcher
 A small panel appears in the bottom corner: text box, Talk button, mode switch, Next step,
 Explain more, Do it for me, Stop, New lesson.
 
+Hotkeys work on Linux. On macOS there are none yet, and every command is on the panel.
+
 | Keys (registered while the app runs) | Action |
 |---|---|
 | hold SUPER+ALT+Space | talk (also interrupts) |
 | SUPER+ALT+N | next step / continue |
 | SUPER+ALT+E | stop and explain this step more |
 | SUPER+ALT+M | switch who clicks |
-| SUPER+ALT+T | type a question (fuzzel) |
+| SUPER+ALT+T | type a question |
 | SUPER+ALT+Escape | stop talking and acting |
 
 Every command also works from a terminal: `tutor-click ask "..."`, `next`, `explain`, `do`,
@@ -54,7 +64,7 @@ of up to 30 tools or ideas the lesson has already taught.
 Everything that touches the desktop sits in `tutor_click/platform/`: screenshots, windows, input,
 the overlay and panel, hotkeys, the microphone and speaker. The lesson loop, the checks, the
 voice models and the providers only see the backend that `platform.load()` returns:
-`platform/hyprland/`, or `platform/macos/` (see "macOS" below: written, not yet run on a Mac). On
+`platform/hyprland/`, `platform/gnome/`, or `platform/macos/`. On
 any other desktop the app says so and stops. The input guards (one app per lesson, never a
 terminal, focus and cursor checked before a press) are in `platform/hands.py` and are the same
 code on every desktop.
@@ -124,6 +134,40 @@ uv pip install --python .venv/bin/python -e .
 .venv/bin/tutor-click install     # launcher entry, icon, ~/.local/bin/tutor-click
 ```
 
+### GNOME
+
+GNOME Shell **51** on Wayland is supported with the included desktop helper. The panel uses
+Qt on Xwayland; the helper provides compositor screenshots, the click-through pointer and
+captions, window information, global hotkeys, and virtual mouse/keyboard input. Sound uses the
+same PipeWire tools as Hyprland. There is no need to turn on GNOME Shell's unsafe mode.
+
+```bash
+uv pip install --python .venv/bin/python -e .
+.venv/bin/tutor-click install
+```
+
+Sign out of GNOME and sign back in **once** after installation, then open **Tutor Click** from
+the app launcher. GNOME discovers newly installed local helpers at login. The helper is
+`tutor-click@handren.dev` in `~/.local/share/gnome-shell/extensions/`; `install` enables it while
+preserving the list of other enabled extensions. The GNOME Extensions app can disable it.
+After an update to the helper, sign out and back in to load the new code.
+
+The helper stays idle until Tutor Click connects. It releases held keys and buttons, removes
+the overlay, and unregisters hotkeys when Tutor Click exits or crashes. Tutor Click keeps the
+same one-app, terminal, focus and cursor checks. It refuses input while the GNOME overview or
+a system dialog is open; close it first. **Super+Alt+T** brings up the panel for typing.
+
+```bash
+tutor-click doctor --input --no-sound  # test screen, overlay, clicks, drag, scroll, keys and typing
+.venv/bin/python tools/gnome_smoke.py  # isolated headless GNOME test; leaves your desktop alone
+```
+
+GNOME 51 is exercised in an isolated real compositor, including input delivery to a test window.
+Other GNOME Shell versions are not yet declared compatible. The panel needs Xwayland.
+Some external Qt apps running through Xwayland ignore injected wheel events in their XInput2
+path. Tutor Click uses the compatible input path for its own panel. In affected apps, scroll
+yourself or use keyboard/menu alternatives; screen verification still detects unchanged steps.
+
 ## Which AI answers
 
 Pick it in the panel ("Answers come from") or with `tutor-click backend NAME`. `tutor-click backend` alone
@@ -147,7 +191,7 @@ applies from the next step and is remembered per provider in
 when the app starts, it wins over what was remembered.
 
 - Claude (`claude-code`, `api`): Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; effort `low`,
-  `medium`, `high`, `xhigh`, `max`. The default is Opus 5.5 at `medium`.
+  `medium`, `high`, `xhigh`, `max`. The default is Haiku 5.5 at `low`.
 - Codex: effort only. Its model is Codex's own default, or `TUTOR_CLICK_CODEX_MODEL`.
 - `openai`, `gemini`, `local`: the model comes from their environment variable; no effort setting.
 
@@ -197,7 +241,7 @@ curl -fLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-fi
 
 ```bash
 uv pip install --python .venv/bin/python pytest
-.venv/bin/python -m pytest -q            # 244 tests, no desktop needed
+.venv/bin/python -m pytest -q            # no desktop needed
 .venv/bin/python -m tutor_click doctor   # checks screen, overlay, sound and provider on this machine
 .venv/bin/python -m tutor_click bench 100      # input delivery on a probe window, about 10 minutes
 .venv/bin/python tools/pointing.py       # pointing accuracy against an app's accessibility tree
@@ -205,7 +249,8 @@ uv pip install --python .venv/bin/python pytest
 
 ## macOS
 
-**Not run on a Mac yet.** It was written on Linux. What is tested here: the Qt overlay and panel
+**Early.** It has run on one Mac (2026-11-18): it started, spoke, ran a lesson and its key presses
+arrived. Whether its clicks land is not confirmed. It was written on Linux. What is tested there: the Qt overlay and panel
 (drawn off screen, and the real lesson loop run on them), the input guards, and the Mac key,
 window and capture logic against a stand-in for the system. What nothing here could test is
 `platform/macos/native.py`, the 120 lines that call macOS itself, and how macOS treats the windows
@@ -260,8 +305,8 @@ dependency installs on an Intel Mac is not known.
 | `TUTOR_CLICK_GEMINI_MODEL` | none | must be set to use `gemini` |
 | `TUTOR_CLICK_LOCAL_MODEL` | none | a vision model you have pulled; must be set to use `local` |
 | `TUTOR_CLICK_LOCAL_URL` | `http://localhost:11434/v1` | Ollama's default address |
-| `TUTOR_CLICK_MODEL` | `claude-opus-5-5` | outranks the Model menu's remembered choice |
-| `TUTOR_CLICK_EFFORT` | `medium` | `low`, `medium`, `high`, `xhigh`, `max`; outranks the Effort menu's remembered choice |
+| `TUTOR_CLICK_MODEL` | `claude-haiku-5-5` | outranks the Model menu's remembered choice |
+| `TUTOR_CLICK_EFFORT` | `low` | `low`, `medium`, `high`, `xhigh`, `max`; outranks the Effort menu's remembered choice |
 | `TUTOR_CLICK_MAX_EDGE` | `1568` | screenshot long edge sent to Claude |
 | `TUTOR_CLICK_WHISPER` | `base.en` | faster-whisper model; downloads from Hugging Face on first use |
 | `TUTOR_CLICK_VOICE` | `af_heart` | Kokoro voice: `am_michael`, `bf_emma`, `bm_george`, ... |

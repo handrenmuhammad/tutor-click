@@ -1,0 +1,7 @@
+{
+  "uuid": "tutor-click@handren.dev",
+  "name": "Tutor Click desktop helper",
+  "description": "Screen capture, click-through teaching overlay and guarded desktop input for Tutor Click. Active only while Tutor Click is connected.",
+  "shell-version": ["51"],
+  "version": 1
+}

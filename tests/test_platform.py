@@ -27,11 +27,13 @@ def test_a_hyprland_session_gets_the_hyprland_backend(monkeypatch):
 @pytest.mark.parametrize(("system", "signature"), [("win32", "abc"), ("linux", None)])
 def test_any_other_desktop_is_refused_in_words_not_with_a_traceback(system, signature, monkeypatch):
     monkeypatch.setattr(platform.sys, "platform", system)
+    monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
+    monkeypatch.delenv("DESKTOP_SESSION", raising=False)
     if signature:
         monkeypatch.setenv("HYPRLAND_INSTANCE_SIGNATURE", signature)
     else:
         monkeypatch.delenv("HYPRLAND_INSTANCE_SIGNATURE", raising=False)
-    with pytest.raises(platform.Unsupported, match="runs on Hyprland .* and macOS so far"):
+    with pytest.raises(platform.Unsupported, match="runs on Hyprland .*GNOME and macOS"):
         platform.load()
 
 

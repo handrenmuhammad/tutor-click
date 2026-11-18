@@ -136,6 +136,13 @@ class Panel(QWidget):
         body.addLayout(row)
         rows.addWidget(self.body)
 
+        # Fonts differ per desktop, so the panel is as wide as its labels need and never narrower than WIDTH.
+        # A button only knows its real size once the style (padding, border) has been applied to it.
+        for button in self.findChildren(QPushButton):
+            button.ensurePolished()
+            button.setMinimumWidth(button.sizeHint().width())
+        self.layout().activate()
+        self.setFixedWidth(max(WIDTH, self.layout().minimumSize().width()))
         self.show()
         self._place()
 

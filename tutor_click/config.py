@@ -51,7 +51,8 @@ NEVER_ACT = tuple(
     c.strip().lower()
     for c in os.environ.get(
         "TUTOR_CLICK_NEVER_ACT",
-        "kitty,foot,alacritty,wezterm,ghostty,konsole,xterm,gnome-terminal,com.anthropic.claude,claude,terminal,iterm2,warp",
+        "kitty,foot,alacritty,wezterm,ghostty,konsole,xterm,gnome-terminal,gnome-terminal-server,org.gnome.terminal,"
+        "org.gnome.console,org.gnome.ptyxis,kgx,ptyxis,com.anthropic.claude,claude,terminal,iterm2,warp",
     ).split(",")
     if c.strip()
 )

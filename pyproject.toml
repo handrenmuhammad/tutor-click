@@ -1,7 +1,7 @@
 [project]
 name = "tutor-click"
 version = "0.1.0"
-description = "Screen tutor overlay: watches your screen, points, captions and talks you through any app. Hyprland; macOS untested"
+description = "Screen tutor overlay for Hyprland and GNOME; macOS untested"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=2.9",
@@ -10,8 +10,8 @@ dependencies = [
     "kokoro-onnx>=0.4",
     "numpy",
     "pillow",  # decodes screenshots to compare them
-    # macOS only: the overlay and panel, the system calls, the microphone and speaker.
-    "PySide6>=6.6; sys_platform == 'darwin'",
+    "PySide6>=6.6",  # GNOME panel and macOS UI
+    # macOS only: system calls, microphone and speaker.
     "pyobjc-framework-Quartz; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices; sys_platform == 'darwin'",

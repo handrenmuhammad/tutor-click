@@ -1,7 +1,7 @@
 """Everything that depends on the desktop: screen, windows, input, overlay, panel, hotkeys, sound.
 
 The lesson loop, trace, verification, voice models and providers reach the desktop only through
-the backend that load() returns: hyprland/ (Hyprland on Wayland) or macos/. hands.py holds the
+the backend that load() returns: hyprland/, gnome/ or macos/. hands.py holds the
 input guards every backend shares, qt/ the overlay and panel for desktops without a layer shell,
 pcm.py the microphone and speaker for those without command-line tools for them.
 
@@ -37,8 +37,13 @@ def load():
         from . import hyprland
 
         return hyprland
+    desktops = os.environ.get("XDG_CURRENT_DESKTOP", "").lower().split(":")
+    if sys.platform.startswith("linux") and ("gnome" in desktops or os.environ.get("DESKTOP_SESSION", "").lower() == "gnome"):
+        from . import gnome
+
+        return gnome
     if sys.platform == "darwin":
         from . import macos
 
         return macos
-    raise Unsupported(f"Tutor Click runs on Hyprland (Wayland) and macOS so far, and this is neither ({sys.platform}).")
+    raise Unsupported(f"Tutor Click runs on Hyprland (Wayland), GNOME and macOS so far; this desktop is unsupported ({sys.platform}).")
